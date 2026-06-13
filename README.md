@@ -10,6 +10,8 @@ whole game runs in the front end.
 | Key | Action |
 | --- | --- |
 | `1` / `2` / `3` | Choose your ship (small / medium / large) |
+| `1`–`3`, or `4` for random | Choose the enemy's ship |
+| `1` / `2` / `3` | Choose difficulty (easy / medium / hard) |
 | `←` / `→` or `A` / `D` | Steer left / right |
 | `Space` | Fire a broadside |
 | `R` | After a battle ends, return to ship select |
@@ -20,6 +22,14 @@ side of your hull faces the enemy, and the balls fly **perpendicular to your
 heading**, so you have to maneuver to bring your guns to bear. The enemy
 captain does the same: it chases you from a distance, then turns sideways to
 line up its own broadside.
+
+The wind matters too. The arrow in the top-left shows the wind direction, and
+your speed depends on your angle to it: sailing perpendicular to the wind
+(beam reach) is full speed, running straight downwind is a bit slower (85%),
+and beating straight into the wind cuts you to 40%. The "Sails %" readout
+under the arrow shows your current efficiency. The wind slowly shifts during
+a battle, the background waves drift with it, and it affects both captains
+equally.
 
 ## Ship types
 
@@ -33,6 +43,17 @@ Small ships dodge and harass; large ships are slow-turning fortresses that can
 delete a small ship with one well-placed volley. The enemy's ship type is
 chosen at random each battle. All type stats live in one table
 (`SHIP_TYPES` in `src/ship.ts`), so tuning balance is a one-line change.
+
+## Difficulty levels
+
+Difficulty changes the enemy captain's skill, never the damage numbers — every
+cannonball still deals 1 damage.
+
+| Level | Enemy reload | Aiming | Sailing |
+| --- | --- | --- | --- |
+| Easy | 2.2 s | fires at where you are | ignores the wind |
+| Medium | 1.8 s | leads your movement (fires at where you'll be) | ignores the wind |
+| Hard | 1.4 s (parity with you) | leads your movement | avoids chasing dead upwind |
 
 ## Combat details
 
@@ -65,6 +86,7 @@ src/ship.ts        Ship class + SHIP_TYPES stat table
 src/ai.ts          enemy steering and fire decisions
 src/cannonball.ts  projectile movement and rendering
 src/explosion.ts   impact explosion effect
+src/wind.ts        wind direction drift + point-of-sail speed curve
 src/input.ts       keyboard state tracking
 ```
 
@@ -86,7 +108,6 @@ so the build works under the `https://<user>.github.io/<repo>/` subpath.
 
 ## Roadmap ideas
 
-- Wind direction and sail effects on speed (skipped for now by choice)
 - More cannon ammo types (chain shot, grape shot)
 - Boarding when ships collide
 - Sound effects

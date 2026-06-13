@@ -3,10 +3,32 @@ import { Cannonball } from './cannonball';
 import { Explosion } from './explosion';
 import type { Input } from './input';
 import { Ship, SHIP_TYPES, type ShipTypeName, type Turn } from './ship';
+import { Wind } from './wind';
 
 const MAX_DT = 0.05; // s; clamp so tab-switch pauses don't teleport ships
+const WAVE_DRIFT = 14; // px/s; background waves ride the wind
 const PLAYER_RELOAD = 1.4; // s between broadsides
-const ENEMY_RELOAD = 2.2;
+
+// Difficulty changes the enemy captain's skill, never damage numbers.
+const DIFFICULTIES = {
+  easy: { label: 'Easy', reload: 2.2, leadShots: false, windAware: false },
+  medium: { label: 'Medium', reload: 1.8, leadShots: true, windAware: false },
+  hard: { label: 'Hard', reload: 1.4, leadShots: true, windAware: true },
+} as const;
+
+type DifficultyName = keyof typeof DIFFICULTIES;
+
+const DIFFICULTY_KEYS: Record<string, DifficultyName> = {
+  Digit1: 'easy',
+  Digit2: 'medium',
+  Digit3: 'hard',
+};
+
+const DIFFICULTY_BLURBS: Record<DifficultyName, string> = {
+  easy: 'slow reload · aims at where you are',
+  medium: 'quicker reload · leads your movement',
+  hard: 'reloads as fast as you · leads shots · sails the wind',
+};
 
 const PLAYER_COLOR = '#8b5a2b';
 const ENEMY_COLOR = '#7a1f1f';
@@ -32,12 +54,16 @@ interface Wave {
 export class Game {
   private ctx: CanvasRenderingContext2D;
   private input: Input;
-  private phase: 'select' | 'battle' = 'select';
+  private phase: 'select' | 'enemySelect' | 'difficultySelect' | 'battle' = 'select';
+  private pendingPlayerType: ShipTypeName = 'small';
+  private pendingEnemyType: ShipTypeName | 'random' = 'random';
+  private difficulty: DifficultyName = 'easy';
   private player!: Ship;
   private enemy!: Ship;
   private cannonballs: Cannonball[] = [];
   private explosions: Explosion[] = [];
   private waves: Wave[] = [];
+  private wind = new Wind();
   private lastTime = 0;
 
   constructor(ctx: CanvasRenderingContext2D, input: Input) {
@@ -54,15 +80,19 @@ export class Game {
     }
   }
 
-  private startBattle(playerType: ShipTypeName) {
+  private startBattle() {
     const { width: w, height: h } = this.ctx.canvas;
-    const enemyTypes = Object.keys(SHIP_TYPES) as ShipTypeName[];
-    const enemyType = enemyTypes[Math.floor(Math.random() * enemyTypes.length)];
+    let enemyType = this.pendingEnemyType;
+    if (enemyType === 'random') {
+      const types = Object.keys(SHIP_TYPES) as ShipTypeName[];
+      enemyType = types[Math.floor(Math.random() * types.length)];
+    }
 
-    this.player = new Ship(w * 0.3, h * 0.6, -Math.PI / 4, PLAYER_COLOR, playerType);
+    this.player = new Ship(w * 0.3, h * 0.6, -Math.PI / 4, PLAYER_COLOR, this.pendingPlayerType);
     this.enemy = new Ship(w * 0.7, h * 0.3, Math.PI * 0.75, ENEMY_COLOR, enemyType);
     this.cannonballs = [];
     this.explosions = [];
+    this.wind = new Wind();
     this.phase = 'battle';
   }
 
@@ -79,6 +109,7 @@ export class Game {
     const dt = Math.min((now - this.lastTime) / 1000, MAX_DT);
     this.lastTime = now;
     this.update(dt);
+    this.input.clearPressed();
     this.render();
     requestAnimationFrame(this.frame);
   };
@@ -86,8 +117,35 @@ export class Game {
   private update(dt: number) {
     if (this.phase === 'select') {
       for (const [code, type] of Object.entries(SELECT_KEYS)) {
-        if (this.input.isDown(code)) {
-          this.startBattle(type);
+        if (this.input.wasPressed(code)) {
+          this.pendingPlayerType = type;
+          this.phase = 'enemySelect';
+          break;
+        }
+      }
+      return;
+    }
+
+    if (this.phase === 'enemySelect') {
+      for (const [code, type] of Object.entries(SELECT_KEYS)) {
+        if (this.input.wasPressed(code)) {
+          this.pendingEnemyType = type;
+          this.phase = 'difficultySelect';
+          break;
+        }
+      }
+      if (this.input.wasPressed('Digit4')) {
+        this.pendingEnemyType = 'random';
+        this.phase = 'difficultySelect';
+      }
+      return;
+    }
+
+    if (this.phase === 'difficultySelect') {
+      for (const [code, name] of Object.entries(DIFFICULTY_KEYS)) {
+        if (this.input.wasPressed(code)) {
+          this.difficulty = name;
+          this.startBattle();
           break;
         }
       }
@@ -96,24 +154,41 @@ export class Game {
 
     const { width: w, height: h } = this.ctx.canvas;
 
-    if (this.over && this.input.isDown('KeyR')) {
+    if (this.over && this.input.wasPressed('KeyR')) {
       this.phase = 'select';
       return;
+    }
+
+    const diff = DIFFICULTIES[this.difficulty];
+    const aiOpts = { leadShots: diff.leadShots, windAware: diff.windAware, wind: this.wind };
+
+    this.wind.update(dt);
+    const wdx = Math.cos(this.wind.direction) * WAVE_DRIFT * dt;
+    const wdy = Math.sin(this.wind.direction) * WAVE_DRIFT * dt;
+    for (const wave of this.waves) {
+      wave.x = (wave.x + wdx + w) % w;
+      wave.y = (wave.y + wdy + h) % h;
     }
 
     let turn: Turn = 0;
     if (this.input.isDown('ArrowLeft') || this.input.isDown('KeyA')) turn = -1;
     if (this.input.isDown('ArrowRight') || this.input.isDown('KeyD')) turn = 1;
 
-    this.player.update(dt, turn, w, h);
-    this.enemy.update(dt, this.over ? 0 : decideTurn(this.enemy, this.player), w, h);
+    this.player.update(dt, turn, w, h, this.wind.speedFactor(this.player.heading));
+    this.enemy.update(
+      dt,
+      this.over ? 0 : decideTurn(this.enemy, this.player, aiOpts),
+      w,
+      h,
+      this.wind.speedFactor(this.enemy.heading),
+    );
 
     if (!this.over) {
       if (this.input.isDown('Space') && this.player.reload <= 0) {
         this.fireBroadside(this.player, this.enemy, PLAYER_RELOAD);
       }
-      if (wantsToFire(this.enemy, this.player) && this.enemy.reload <= 0) {
-        this.fireBroadside(this.enemy, this.player, ENEMY_RELOAD);
+      if (wantsToFire(this.enemy, this.player, aiOpts) && this.enemy.reload <= 0) {
+        this.fireBroadside(this.enemy, this.player, diff.reload);
       }
     }
 
@@ -160,7 +235,15 @@ export class Game {
   private render() {
     this.drawSea();
     if (this.phase === 'select') {
-      this.drawShipSelect();
+      this.drawShipPicker('Pirates: Naval Combat', 'Choose your ship', PLAYER_COLOR, false);
+      return;
+    }
+    if (this.phase === 'enemySelect') {
+      this.drawShipPicker('Choose the enemy ship', 'Who do you want to face?', ENEMY_COLOR, true);
+      return;
+    }
+    if (this.phase === 'difficultySelect') {
+      this.drawDifficultySelect();
       return;
     }
 
@@ -171,7 +254,12 @@ export class Game {
     for (const ex of this.explosions) ex.draw(ctx);
 
     this.drawHealthRow(`You (${this.player.type})`, this.player, 0);
-    this.drawHealthRow(`Enemy (${this.enemy.type})`, this.enemy, 1);
+    this.drawHealthRow(
+      `Enemy (${this.enemy.type} · ${DIFFICULTIES[this.difficulty].label})`,
+      this.enemy,
+      1,
+    );
+    this.drawWindIndicator();
 
     if (this.over) this.drawGameOver();
   }
@@ -192,7 +280,7 @@ export class Game {
     }
   }
 
-  private drawShipSelect() {
+  private drawShipPicker(title: string, subtitle: string, hullColor: string, withRandom: boolean) {
     const ctx = this.ctx;
     const { width: w, height: h } = ctx.canvas;
 
@@ -200,17 +288,20 @@ export class Game {
     ctx.textBaseline = 'middle';
     ctx.fillStyle = '#fff';
     ctx.font = 'bold 44px system-ui, sans-serif';
-    ctx.fillText('Pirates: Naval Combat', w / 2, h * 0.18);
+    ctx.fillText(title, w / 2, h * 0.18);
     ctx.font = '22px system-ui, sans-serif';
-    ctx.fillText('Choose your ship', w / 2, h * 0.18 + 44);
+    ctx.fillText(subtitle, w / 2, h * 0.18 + 44);
 
     const types = Object.keys(SHIP_TYPES) as ShipTypeName[];
+    const cards = types.length + (withRandom ? 1 : 0);
+    const cardX = (i: number) => w / 2 + (i - (cards - 1) / 2) * 230;
+    const y = h * 0.5;
+
     types.forEach((type, i) => {
       const stats = SHIP_TYPES[type];
-      const x = w / 2 + (i - 1) * 230;
-      const y = h * 0.5;
+      const x = cardX(i);
 
-      new Ship(x, y, -Math.PI / 2, PLAYER_COLOR, type).draw(ctx);
+      new Ship(x, y, -Math.PI / 2, hullColor, type).draw(ctx);
 
       ctx.fillStyle = '#fff';
       ctx.textAlign = 'center';
@@ -221,10 +312,61 @@ export class Game {
       ctx.fillText(`${stats.guns} guns · ${SPEED_LABELS[type]} · ${stats.maxHealth} hits to sink`, x, y + 94);
     });
 
+    if (withRandom) {
+      const x = cardX(types.length);
+      ctx.strokeStyle = hullColor;
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.arc(x, y, 26, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.fillStyle = hullColor;
+      ctx.font = 'bold 34px system-ui, sans-serif';
+      ctx.fillText('?', x, y + 1);
+
+      ctx.fillStyle = '#fff';
+      ctx.font = 'bold 20px system-ui, sans-serif';
+      ctx.fillText(`${types.length + 1} — Random`, x, y + 70);
+      ctx.font = '15px system-ui, sans-serif';
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.8)';
+      ctx.fillText('any of the three', x, y + 94);
+    }
+
     ctx.fillStyle = 'rgba(255, 255, 255, 0.7)';
     ctx.font = '17px system-ui, sans-serif';
-    ctx.fillText('Press 1, 2 or 3 to set sail — the enemy ship is chosen at random', w / 2, h * 0.82);
-    ctx.fillText('Press left or right arrows to control the ship - press spacebar to fire', w / 2, h * 0.82 + 28);
+    if (withRandom) {
+      ctx.fillText('Press 1, 2, 3 to pick the enemy ship — or 4 to leave it to chance', w / 2, h * 0.82);
+    } else {
+      ctx.fillText('Press 1, 2 or 3 to choose your ship', w / 2, h * 0.82);
+      ctx.fillText('Press left or right arrows to control the ship - press spacebar to fire', w / 2, h * 0.82 + 28);
+    }
+  }
+
+  private drawDifficultySelect() {
+    const ctx = this.ctx;
+    const { width: w, height: h } = ctx.canvas;
+
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = '#fff';
+    ctx.font = 'bold 44px system-ui, sans-serif';
+    ctx.fillText('Choose difficulty', w / 2, h * 0.18);
+    ctx.font = '22px system-ui, sans-serif';
+    ctx.fillText('How good is the enemy captain?', w / 2, h * 0.18 + 44);
+
+    const names = Object.keys(DIFFICULTIES) as DifficultyName[];
+    names.forEach((name, i) => {
+      const y = h * 0.42 + i * 80;
+      ctx.fillStyle = '#fff';
+      ctx.font = 'bold 26px system-ui, sans-serif';
+      ctx.fillText(`${i + 1} — ${DIFFICULTIES[name].label}`, w / 2, y);
+      ctx.font = '16px system-ui, sans-serif';
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.75)';
+      ctx.fillText(DIFFICULTY_BLURBS[name], w / 2, y + 28);
+    });
+
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.7)';
+    ctx.font = '17px system-ui, sans-serif';
+    ctx.fillText('Press 1, 2 or 3 to set sail', w / 2, h * 0.85);
   }
 
   private drawHealthRow(label: string, ship: Ship, row: number) {
@@ -248,6 +390,50 @@ export class Game {
       ctx.fillStyle = i < ship.health ? '#4caf50' : 'rgba(255, 255, 255, 0.25)';
       ctx.fillRect(x0 + i * (segW + gap), y, segW, segH);
     }
+  }
+
+  private drawWindIndicator() {
+    const ctx = this.ctx;
+    const cx = 52;
+    const cy = 52;
+    const r = 28;
+
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.3)';
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.5)';
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+
+    const hx = Math.cos(this.wind.direction);
+    const hy = Math.sin(this.wind.direction);
+
+    ctx.strokeStyle = '#fff';
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(cx - hx * (r - 9), cy - hy * (r - 9));
+    ctx.lineTo(cx + hx * (r - 11), cy + hy * (r - 11));
+    ctx.stroke();
+
+    const tipX = cx + hx * (r - 6);
+    const tipY = cy + hy * (r - 6);
+    ctx.fillStyle = '#fff';
+    ctx.beginPath();
+    ctx.moveTo(tipX, tipY);
+    ctx.lineTo(tipX - hx * 10 - hy * 5.5, tipY - hy * 10 + hx * 5.5);
+    ctx.lineTo(tipX - hx * 10 + hy * 5.5, tipY - hy * 10 - hx * 5.5);
+    ctx.closePath();
+    ctx.fill();
+
+    ctx.font = '13px system-ui, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = '#fff';
+    ctx.fillText('Wind', cx, cy + r + 14);
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.8)';
+    const pct = Math.round(this.wind.speedFactor(this.player.heading) * 100);
+    ctx.fillText(`Sails ${pct}%`, cx, cy + r + 32);
   }
 
   private drawGameOver() {

@@ -62,7 +62,7 @@ export class Ship {
     this.health = Math.max(0, this.health - 1);
   }
 
-  update(dt: number, turn: Turn, worldW: number, worldH: number) {
+  update(dt: number, turn: Turn, worldW: number, worldH: number, speedFactor = 1) {
     this.reload = Math.max(0, this.reload - dt);
 
     if (!this.alive) {
@@ -71,8 +71,8 @@ export class Ship {
     }
 
     this.heading += turn * this.turnRate * dt;
-    this.x += Math.cos(this.heading) * this.speed * dt;
-    this.y += Math.sin(this.heading) * this.speed * dt;
+    this.x += Math.cos(this.heading) * this.speed * speedFactor * dt;
+    this.y += Math.sin(this.heading) * this.speed * speedFactor * dt;
 
     // Wrap around world edges, with margin so the ship fully leaves first.
     const m = this.length;

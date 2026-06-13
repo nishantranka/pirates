@@ -1,6 +1,6 @@
 import type { Ship } from './ship';
 
-const SPEED = 260; // px/s
+export const CANNONBALL_SPEED = 260; // px/s
 const MAX_RANGE = 320; // px before the ball splashes into the sea
 
 export class Cannonball {
@@ -16,15 +16,15 @@ export class Cannonball {
   constructor(x: number, y: number, direction: number, owner: Ship) {
     this.x = x;
     this.y = y;
-    this.vx = Math.cos(direction) * SPEED;
-    this.vy = Math.sin(direction) * SPEED;
+    this.vx = Math.cos(direction) * CANNONBALL_SPEED;
+    this.vy = Math.sin(direction) * CANNONBALL_SPEED;
     this.owner = owner;
   }
 
   update(dt: number) {
     this.x += this.vx * dt;
     this.y += this.vy * dt;
-    this.traveled += SPEED * dt;
+    this.traveled += CANNONBALL_SPEED * dt;
     if (this.traveled >= MAX_RANGE) this.spent = true;
   }
 
