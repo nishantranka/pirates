@@ -3,6 +3,20 @@ import { Input } from './input';
 import { SHIP_TYPES, type ShipTypeName } from './ship';
 import './style.css';
 
+// Preload a sound and return a function that plays a fresh clone each call
+// (cloning lets multiple instances overlap, e.g. several explosions at once).
+function makeSound(url: string): () => void {
+  const audio = new Audio(url);
+  audio.preload = 'auto';
+  return () => {
+    const clone = audio.cloneNode() as HTMLAudioElement;
+    clone.play().catch(() => {});
+  };
+}
+
+const playCannonFire = makeSound('/cannon.mp3');
+const playExplosion = makeSound('/explosion.mp3');
+
 // ── Canvas setup ─────────────────────────────────────────────────────────────
 
 const canvas = document.getElementById('game') as HTMLCanvasElement;
@@ -18,6 +32,8 @@ function resize() {
 
 const input = new Input();
 const game = new Game(ctx, input);
+game.onCannonFire = playCannonFire;
+game.onHit = playExplosion;
 game.start();
 
 window.addEventListener('resize', resize);

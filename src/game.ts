@@ -53,6 +53,10 @@ export class Game {
 
   /** Set by main.ts; called once when the battle ends (won = enemy sunk). */
   onGameOver: ((won: boolean) => void) | null = null;
+  /** Called when the player fires a broadside. */
+  onCannonFire: (() => void) | null = null;
+  /** Called each time a cannonball hits a ship. */
+  onHit: (() => void) | null = null;
 
   private readonly isTouchDevice = navigator.maxTouchPoints > 0;
   private btnLeft!: BtnRect;
@@ -192,6 +196,7 @@ export class Game {
     if (!this.over) {
       if (this.input.isDown('Space') && this.player.reload <= 0) {
         this.fireBroadside(this.player, this.enemy, PLAYER_RELOAD);
+        this.onCannonFire?.();
       }
       if (wantsToFire(this.enemy, this.player, aiOpts) && this.enemy.reload <= 0) {
         this.fireBroadside(this.enemy, this.player, diff.reload);
@@ -205,6 +210,7 @@ export class Game {
         ball.spent = true;
         target.takeHit();
         this.explosions.push(new Explosion(ball.x, ball.y));
+        this.onHit?.();
       }
     }
     this.cannonballs = this.cannonballs.filter((b) => !b.spent);
