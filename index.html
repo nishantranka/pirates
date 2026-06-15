@@ -23,11 +23,16 @@
         <div class="modal-scroll">
           <h1>Pirates: Naval Combat</h1>
 
+          <div class="section-label">Game mode</div>
+          <div class="card-row" id="mode-cards"></div>
+
           <div class="section-label">Your ship</div>
           <div class="card-row" id="player-cards"></div>
 
-          <div class="section-label">Enemy ship</div>
-          <div class="card-row" id="enemy-cards"></div>
+          <div id="enemy-section">
+            <div class="section-label">Enemy ship</div>
+            <div class="card-row" id="enemy-cards"></div>
+          </div>
 
           <div class="section-label">Difficulty</div>
           <div class="card-row" id="difficulty-cards"></div>
@@ -47,6 +52,7 @@
         <div class="gameover-buttons">
           <button id="btn-replay">Play Again</button>
           <button id="btn-harder" class="hidden">Play on <span id="harder-label"></span></button>
+          <button id="btn-menu" class="hidden">Return to Menu</button>
         </div>
       </div>
     </div>

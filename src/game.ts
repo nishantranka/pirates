@@ -57,6 +57,8 @@ export class Game {
   onCannonFire: (() => void) | null = null;
   /** Called each time a cannonball hits a ship. */
   onHit: (() => void) | null = null;
+  /** When non-null (survivor mode), renders the kill count in the HUD. */
+  survivorKills: number | null = null;
 
   private readonly isTouchDevice = navigator.maxTouchPoints > 0;
   private btnLeft!: BtnRect;
@@ -130,7 +132,28 @@ export class Game {
     this.explosions = [];
     this.wind = new Wind();
     this.gameOverFired = false;
+    this.survivorKills = null;
     this.phase = 'battle';
+  }
+
+  /** Survivor mode: replace the enemy with a new ship without resetting the player. */
+  spawnNextEnemy(type: ShipTypeName, difficulty: DifficultyName) {
+    const { width: w, height: h } = this.ctx.canvas;
+    let ex: number, ey: number;
+    let attempts = 0;
+    do {
+      ex = 50 + Math.random() * (w - 100);
+      ey = 50 + Math.random() * (h - 100);
+      attempts++;
+    } while (Math.hypot(ex - this.player.x, ey - this.player.y) < 300 && attempts < 20);
+
+    // Face roughly toward the player.
+    const heading = Math.atan2(this.player.y - ey, this.player.x - ex);
+    this.enemy = new Ship(ex, ey, heading, ENEMY_COLOR, type);
+    this.difficulty = difficulty;
+    this.cannonballs = [];
+    this.explosions = [];
+    this.gameOverFired = false;
   }
 
   private get over(): boolean {
@@ -259,6 +282,7 @@ export class Game {
       this.enemy,
       1,
     );
+    if (this.survivorKills !== null) this.drawKillCounter();
     this.drawWindIndicator();
 
     if (this.isTouchDevice && !this.over) this.drawTouchButtons();
@@ -326,6 +350,21 @@ export class Game {
       ctx.fillStyle = i < ship.health ? '#4caf50' : 'rgba(255, 255, 255, 0.25)';
       ctx.fillRect(x0 + i * (segW + gap), y, segW, segH);
     }
+  }
+
+  private drawKillCounter() {
+    const ctx = this.ctx;
+    const margin = 16;
+    const segH = 10;
+    const rowH = segH + 12;
+    // Sits below the two health rows.
+    const y = margin + 2 * rowH + 4;
+
+    ctx.font = 'bold 13px system-ui, sans-serif';
+    ctx.textAlign = 'right';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = '#ffd75e';
+    ctx.fillText(`⚓ ${this.survivorKills} sunk`, ctx.canvas.width - margin, y);
   }
 
   private drawWindIndicator() {

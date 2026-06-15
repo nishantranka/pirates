@@ -125,6 +125,12 @@ canvas {
   border-color: #fff;
 }
 
+.card.disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
 .card .card-name {
   font-weight: 700;
   font-size: 14px;
@@ -220,4 +226,10 @@ canvas {
 #btn-harder {
   background: #b71c1c;
   color: #fff;
+}
+
+#btn-menu {
+  background: rgba(255, 255, 255, 0.15);
+  color: #fff;
+  border: 1px solid rgba(255, 255, 255, 0.3);
 }

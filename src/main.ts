@@ -17,7 +17,7 @@ function makeSound(url: string): () => void {
 const playCannonFire = makeSound('./cannon.mp3');
 const playExplosion = makeSound('./explosion.mp3');
 
-// ── Canvas setup ─────────────────────────────────────────────────────────────
+// ── Canvas setup ──────────────────────────────────────────────────────────────
 
 const canvas = document.getElementById('game') as HTMLCanvasElement;
 const ctx = canvas.getContext('2d')!;
@@ -39,7 +39,7 @@ game.start();
 window.addEventListener('resize', resize);
 resize();
 
-// ── Selection state ───────────────────────────────────────────────────────────
+// ── Constants ─────────────────────────────────────────────────────────────────
 
 const SPEED_LABELS: Record<ShipTypeName, string> = {
   small: 'fast',
@@ -52,11 +52,23 @@ const NEXT_DIFFICULTY: Partial<Record<DifficultyName, DifficultyName>> = {
   medium: 'hard',
 };
 
+const DIFFICULTY_ORDER: DifficultyName[] = ['easy', 'medium', 'hard'];
+const SHIP_ORDER: ShipTypeName[] = ['small', 'medium', 'large'];
+
+// ── Selection state ───────────────────────────────────────────────────────────
+
+type GameMode = 'normal' | 'survivor';
+let selectedMode: GameMode = 'normal';
 let selectedPlayer: ShipTypeName = 'small';
 let selectedEnemy: ShipTypeName | 'random' = 'random';
 let selectedDifficulty: DifficultyName = 'easy';
 
-// ── Build the selection cards ─────────────────────────────────────────────────
+// Survivor wave state
+let survivorDiffIndex = 0;
+let survivorShipIndex = 0;
+let survivorKills = 0;
+
+// ── Build selection cards ─────────────────────────────────────────────────────
 
 function makeCard(label: string, stat: string, key: string): HTMLButtonElement {
   const btn = document.createElement('button');
@@ -67,7 +79,43 @@ function makeCard(label: string, stat: string, key: string): HTMLButtonElement {
 }
 
 function selectCard(row: Element, key: string) {
-  row.querySelectorAll('.card').forEach((c) => c.classList.toggle('selected', (c as HTMLElement).dataset.key === key));
+  row.querySelectorAll('.card').forEach((c) =>
+    c.classList.toggle('selected', (c as HTMLElement).dataset.key === key),
+  );
+}
+
+// Game mode cards
+const modeRow = document.getElementById('mode-cards')!;
+const enemySection = document.getElementById('enemy-section')!;
+
+const modeOptions: Array<{ key: GameMode; label: string; stat: string; disabled?: boolean }> = [
+  { key: 'normal', label: 'Normal', stat: 'one battle · win or lose' },
+  { key: 'survivor', label: 'Survivor', stat: 'fight until you sink' },
+];
+
+modeOptions.forEach(({ key, label, stat }) => {
+  const card = makeCard(label, stat, key);
+  card.addEventListener('click', () => {
+    selectedMode = key;
+    selectCard(modeRow, key);
+    updateModeUI();
+  });
+  modeRow.appendChild(card);
+});
+
+// Multiplayer — greyed out placeholder
+const multiCard = makeCard('Multiplayer', 'coming soon', 'multiplayer');
+multiCard.classList.add('disabled');
+modeRow.appendChild(multiCard);
+
+selectCard(modeRow, selectedMode);
+
+function updateModeUI() {
+  if (selectedMode === 'survivor') {
+    enemySection.classList.add('hidden');
+  } else {
+    enemySection.classList.remove('hidden');
+  }
 }
 
 // Player ship cards
@@ -127,7 +175,7 @@ const diffRow = document.getElementById('difficulty-cards')!;
 });
 selectCard(diffRow, selectedDifficulty);
 
-// ── Set Sail ─────────────────────────────────────────────────────────────────
+// ── Overlay refs ──────────────────────────────────────────────────────────────
 
 const menuOverlay = document.getElementById('menu-overlay')!;
 const gameoverOverlay = document.getElementById('gameover-overlay')!;
@@ -135,10 +183,26 @@ const gameoverTitle = document.getElementById('gameover-title')!;
 const btnReplay = document.getElementById('btn-replay')!;
 const btnHarder = document.getElementById('btn-harder')!;
 const harderLabel = document.getElementById('harder-label')!;
+const btnMenu = document.getElementById('btn-menu')!;
+
+// ── Set Sail ──────────────────────────────────────────────────────────────────
+
+function startSurvivor() {
+  survivorDiffIndex = DIFFICULTY_ORDER.indexOf(selectedDifficulty);
+  survivorShipIndex = 0;
+  survivorKills = 0;
+  game.survivorKills = 0;
+  game.startBattle(selectedPlayer, SHIP_ORDER[0], DIFFICULTY_ORDER[survivorDiffIndex]);
+}
 
 function setSail() {
   menuOverlay.classList.add('hidden');
-  game.startBattle(selectedPlayer, selectedEnemy, selectedDifficulty);
+  if (selectedMode === 'survivor') {
+    startSurvivor();
+  } else {
+    game.survivorKills = null;
+    game.startBattle(selectedPlayer, selectedEnemy, selectedDifficulty);
+  }
 }
 
 document.getElementById('set-sail')!.addEventListener('click', setSail);
@@ -146,14 +210,37 @@ document.getElementById('set-sail')!.addEventListener('click', setSail);
 // ── Game-over handling ────────────────────────────────────────────────────────
 
 game.onGameOver = (won: boolean) => {
-  gameoverTitle.textContent = won ? 'Enemy ship destroyed!' : 'Your ship was destroyed!';
-
-  const nextDiff = NEXT_DIFFICULTY[selectedDifficulty];
-  if (nextDiff) {
-    harderLabel.textContent = DIFFICULTIES[nextDiff].label;
-    btnHarder.classList.remove('hidden');
-  } else {
+  if (selectedMode === 'survivor') {
+    if (won) {
+      // Enemy sunk — spawn the next wave without showing the game-over overlay.
+      survivorKills++;
+      survivorShipIndex++;
+      if (survivorShipIndex >= SHIP_ORDER.length) {
+        survivorShipIndex = 0;
+        survivorDiffIndex = Math.min(survivorDiffIndex + 1, DIFFICULTY_ORDER.length - 1);
+      }
+      const nextType = SHIP_ORDER[survivorShipIndex];
+      const nextDiff = DIFFICULTY_ORDER[survivorDiffIndex];
+      game.survivorKills = survivorKills;
+      game.spawnNextEnemy(nextType, nextDiff);
+      return;
+    }
+    // Player died in survivor mode.
+    const n = survivorKills;
+    gameoverTitle.textContent = `You sunk ${n} ship${n !== 1 ? 's' : ''} before going down!`;
     btnHarder.classList.add('hidden');
+    btnMenu.classList.remove('hidden');
+  } else {
+    // Normal mode.
+    gameoverTitle.textContent = won ? 'Enemy ship destroyed!' : 'Your ship was destroyed!';
+    const nextDiff = NEXT_DIFFICULTY[selectedDifficulty];
+    if (nextDiff) {
+      harderLabel.textContent = DIFFICULTIES[nextDiff].label;
+      btnHarder.classList.remove('hidden');
+    } else {
+      btnHarder.classList.add('hidden');
+    }
+    btnMenu.classList.add('hidden');
   }
 
   gameoverOverlay.classList.remove('hidden');
@@ -161,7 +248,11 @@ game.onGameOver = (won: boolean) => {
 
 btnReplay.addEventListener('click', () => {
   gameoverOverlay.classList.add('hidden');
-  game.startBattle(selectedPlayer, selectedEnemy, selectedDifficulty);
+  if (selectedMode === 'survivor') {
+    startSurvivor();
+  } else {
+    game.startBattle(selectedPlayer, selectedEnemy, selectedDifficulty);
+  }
 });
 
 btnHarder.addEventListener('click', () => {
@@ -174,10 +265,19 @@ btnHarder.addEventListener('click', () => {
   game.startBattle(selectedPlayer, selectedEnemy, selectedDifficulty);
 });
 
-// R key for keyboard users: same as Play Again
+btnMenu.addEventListener('click', () => {
+  gameoverOverlay.classList.add('hidden');
+  menuOverlay.classList.remove('hidden');
+});
+
+// R key: Play Again (works in both modes).
 window.addEventListener('keydown', (e) => {
   if (e.code === 'KeyR' && !gameoverOverlay.classList.contains('hidden')) {
     gameoverOverlay.classList.add('hidden');
-    game.startBattle(selectedPlayer, selectedEnemy, selectedDifficulty);
+    if (selectedMode === 'survivor') {
+      startSurvivor();
+    } else {
+      game.startBattle(selectedPlayer, selectedEnemy, selectedDifficulty);
+    }
   }
 });
