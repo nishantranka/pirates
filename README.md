@@ -26,6 +26,12 @@ battle once 2–4 players are in.
   broadcasts 30 Hz snapshots; guests send steering/fire inputs and render with
   smoothing. Rooms are matched through the free public PeerJS broker, then all
   game traffic flows peer-to-peer.
+- **Bots** — no friends online? The host can fill empty slots with AI captains
+  (**Add Bot 🤖** in the lobby, up to 3). Bots hunt the most promising target
+  (close and already damaged), lead their shots with the wind, hold fire when
+  an island blocks the shot, and when wounded they break off and run for
+  cover, favoring fast points of sail and keeping islands between themselves
+  and the threat.
 - After a battle the host can call a **rematch** (fresh islands) or send
   everyone **back to the lobby**. If a captain drops mid-fight, their ship
   strikes its colors and sinks.
@@ -109,6 +115,7 @@ src/main.ts        entry point: canvas setup, menu/lobby UI wiring
 src/game.ts        single-player game loop, firing, collisions, HUD
 src/multiplayer.ts online session: lobby, host simulation, guest rendering
 src/net.ts         PeerJS transport + wire message types
+src/bot.ts         AI captains for multiplayer (host-side)
 src/island.ts      island generation, drawing, ship/cannonball collision
 src/ship.ts        Ship class + SHIP_TYPES stat table
 src/ai.ts          enemy steering and fire decisions (single player)

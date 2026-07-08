@@ -299,6 +299,7 @@ const roomCodeEl = document.getElementById('room-code')!;
 const lobbyPlayersEl = document.getElementById('lobby-players')!;
 const lobbyShipRow = document.getElementById('lobby-ship-cards')!;
 const btnReady = document.getElementById('btn-ready') as HTMLButtonElement;
+const btnAddBot = document.getElementById('btn-addbot') as HTMLButtonElement;
 const btnStart = document.getElementById('btn-start') as HTMLButtonElement;
 const btnLeave = document.getElementById('btn-leave')!;
 
@@ -343,7 +344,8 @@ function renderLobby(players: LobbyPlayerInfo[], you: number, canStart: boolean)
 
     const name = document.createElement('span');
     name.className = 'pname';
-    name.textContent = p.name + (i === you ? ' (you)' : '') + (i === 0 ? ' ⚓' : '');
+    name.textContent =
+      p.name + (p.bot ? ' 🤖' : '') + (i === you ? ' (you)' : '') + (i === 0 ? ' ⚓' : '');
 
     const ship = document.createElement('span');
     ship.className = 'pship';
@@ -354,6 +356,17 @@ function renderLobby(players: LobbyPlayerInfo[], you: number, canStart: boolean)
     ready.textContent = p.ready ? 'READY' : 'waiting';
 
     row.append(dot, name, ship, ready);
+
+    // Host can dismiss bots.
+    if (p.bot && (mp?.isHost ?? false)) {
+      const kick = document.createElement('button');
+      kick.className = 'pkick';
+      kick.textContent = '✕';
+      kick.title = 'Dismiss bot';
+      kick.addEventListener('click', () => mp?.removeBot(i));
+      row.appendChild(kick);
+    }
+
     lobbyPlayersEl.appendChild(row);
   });
 
@@ -370,10 +383,14 @@ function renderLobby(players: LobbyPlayerInfo[], you: number, canStart: boolean)
   const isHost = mp?.isHost ?? false;
   btnStart.classList.toggle('hidden', !isHost);
   btnStart.disabled = !canStart;
+  btnAddBot.classList.toggle('hidden', !isHost);
+  btnAddBot.disabled = players.length >= 4;
 
   const lobbyStatus = document.getElementById('lobby-status')!;
   if (players.length < 2) {
-    lobbyStatus.textContent = 'Waiting for at least one more captain…';
+    lobbyStatus.textContent = isHost
+      ? 'Waiting for captains — invite friends or add bots…'
+      : 'Waiting for at least one more captain…';
   } else if (!canStart) {
     lobbyStatus.textContent = 'Waiting for everyone to be ready…';
   } else {
@@ -469,6 +486,7 @@ btnReady.addEventListener('click', () => {
   mp?.setReady(myReady);
 });
 
+btnAddBot.addEventListener('click', () => mp?.addBot());
 btnStart.addEventListener('click', () => mp?.startBattle());
 btnLeave.addEventListener('click', () => endMpSession());
 btnRematch.addEventListener('click', () => mp?.rematch());

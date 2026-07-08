@@ -8,6 +8,7 @@
 // their window size; each client letterboxes it to fit.
 
 import { angleDiff } from './ai';
+import { decideBot } from './bot';
 import { Cannonball } from './cannonball';
 import { Explosion } from './explosion';
 import type { Input } from './input';
@@ -48,6 +49,9 @@ const SMOOTH_RATE = 14; // guest position smoothing (higher = snappier)
 const SNAP_DIST = 250; // beyond this a target jump is a wrap/teleport — snap, don't glide
 
 const PLAYER_COLORS = ['#8b5a2b', '#7a1f1f', '#2e5d34', '#4a3d7a'];
+
+const BOT_NAMES = ['Iron Bess', 'Mad Morgan', 'Salty Pete', 'One-Eye Jack'];
+const SHIP_NAMES = Object.keys(SHIP_TYPES) as ShipTypeName[];
 
 const SPAWNS: Array<{ x: number; y: number }> = [
   { x: WORLD_W * 0.14, y: WORLD_H * 0.16 },
@@ -95,11 +99,12 @@ class Splash {
 }
 
 interface HostPlayer {
-  conn: DataConnection | null; // null for the host itself
+  conn: DataConnection | null; // null for the host itself and for bots
   name: string;
   ship: ShipTypeName;
   ready: boolean;
   connected: boolean;
+  bot: boolean;
   turn: Turn;
   fire: boolean;
 }
@@ -193,7 +198,7 @@ export class MpSession {
   ): MpSession {
     const s = new MpSession(true, ctx, input, cb, sounds);
     s.players = [
-      { conn: null, name: cleanName(name), ship: 'small', ready: false, connected: true, turn: 0, fire: false },
+      { conn: null, name: cleanName(name), ship: 'small', ready: false, connected: true, bot: false, turn: 0, fire: false },
     ];
     s.handle = createHostPeer({
       onReady: (code) => {
@@ -248,6 +253,31 @@ export class MpSession {
     }
   }
 
+  /** Host only: fill an empty slot with an AI captain (always ready). */
+  addBot() {
+    if (!this.isHost || this.phase !== 'lobby' || this.players.length >= MAX_PLAYERS) return;
+    const used = new Set(this.players.map((p) => p.name));
+    const name = BOT_NAMES.find((n) => !used.has(n)) ?? 'Bot';
+    this.players.push({
+      conn: null,
+      name,
+      ship: SHIP_NAMES[Math.floor(Math.random() * SHIP_NAMES.length)],
+      ready: true,
+      connected: true,
+      bot: true,
+      turn: 0,
+      fire: false,
+    });
+    this.pushLobby();
+  }
+
+  /** Host only: dismiss a bot from the lobby. */
+  removeBot(index: number) {
+    if (!this.isHost || this.phase !== 'lobby' || !this.players[index]?.bot) return;
+    this.players.splice(index, 1);
+    this.pushLobby();
+  }
+
   /** Host only: launch the battle (lobby must be all-ready with 2+ players). */
   startBattle() {
     if (!this.isHost || this.phase !== 'lobby' || !this.canStart()) return;
@@ -265,7 +295,7 @@ export class MpSession {
   backToLobby() {
     if (!this.isHost || this.phase !== 'end') return;
     this.players = this.players.filter((p) => p.connected);
-    for (const p of this.players) p.ready = false;
+    for (const p of this.players) p.ready = p.bot;
     this.phase = 'lobby';
     this.stopLoop();
     this.broadcast({ t: 'toLobby' });
@@ -314,6 +344,7 @@ export class MpSession {
         ship: 'small',
         ready: false,
         connected: true,
+        bot: false,
         turn: 0,
         fire: false,
       });
@@ -364,6 +395,7 @@ export class MpSession {
       name: p.name,
       ship: p.ship,
       ready: p.ready,
+      bot: p.bot,
     }));
     this.players.forEach((p, i) => {
       if (p.conn?.open) p.conn.send({ t: 'lobby', players: info, you: i } satisfies H2CMsg);
@@ -421,7 +453,7 @@ export class MpSession {
     this.wind.update(dt);
     this.driftWaves(dt);
 
-    // Host reads its own keys; guests' inputs arrived over the wire.
+    // Host reads its own keys; guests' inputs arrived over the wire; bots think.
     if (this.phase === 'battle') {
       this.players[0].turn =
         this.input.isDown('ArrowLeft') || this.input.isDown('KeyA')
@@ -430,6 +462,13 @@ export class MpSession {
             ? 1
             : 0;
       this.players[0].fire = this.input.isDown('Space');
+
+      this.players.forEach((p, i) => {
+        if (!p.bot) return;
+        const d = decideBot(this.ships[i], this.ships, this.islands, this.wind);
+        p.turn = d.turn;
+        p.fire = d.fire;
+      });
     }
 
     this.ships.forEach((ship, i) => {

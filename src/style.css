@@ -360,6 +360,31 @@ canvas {
   cursor: not-allowed;
 }
 
+#btn-addbot {
+  background: #3b5b8c;
+  color: #fff;
+}
+
+#btn-addbot:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.lobby-player .pkick {
+  background: none;
+  border: none;
+  color: rgba(255, 255, 255, 0.55);
+  font-size: 15px;
+  font-weight: 700;
+  cursor: pointer;
+  padding: 0 2px;
+  line-height: 1;
+}
+
+.lobby-player .pkick:hover {
+  color: #ff8a7a;
+}
+
 #btn-leave,
 #btn-mpleave {
   background: rgba(255, 255, 255, 0.15);

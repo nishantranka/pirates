@@ -166,6 +166,29 @@ export function islandHitsPoint(islands: IslandData[], x: number, y: number): bo
   return false;
 }
 
+/** Does the segment (x1,y1)→(x2,y2) cross any island? Used for line-of-sight. */
+export function segmentHitsIsland(
+  islands: IslandData[],
+  x1: number,
+  y1: number,
+  x2: number,
+  y2: number,
+): boolean {
+  const dx = x2 - x1;
+  const dy = y2 - y1;
+  const lenSq = dx * dx + dy * dy;
+  for (const island of islands) {
+    for (const c of island.circles) {
+      let t = lenSq > 0 ? ((c.x - x1) * dx + (c.y - y1) * dy) / lenSq : 0;
+      t = Math.max(0, Math.min(1, t));
+      const px = x1 + dx * t;
+      const py = y1 + dy * t;
+      if (Math.hypot(c.x - px, c.y - py) <= c.r) return true;
+    }
+  }
+  return false;
+}
+
 /** Push a ship out of any island it overlaps so hulls slide along the shore. */
 export function resolveShipIslands(
   islands: IslandData[],

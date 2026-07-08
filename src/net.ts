@@ -19,6 +19,7 @@ export interface LobbyPlayerInfo {
   name: string;
   ship: ShipTypeName;
   ready: boolean;
+  bot: boolean;
 }
 
 export interface ShipSpawn {
