@@ -16,7 +16,7 @@ import {
   drawIsland,
   generateIslands,
   islandHitsPoint,
-  resolveShipIslands,
+  shipHitsIsland,
   type IslandData,
 } from './island';
 import {
@@ -474,7 +474,11 @@ export class MpSession {
     this.ships.forEach((ship, i) => {
       const turn: Turn = this.phase === 'battle' && this.players[i].connected ? this.players[i].turn : 0;
       ship.update(dt, turn, WORLD_W, WORLD_H, this.wind.speedFactor(ship.heading));
-      resolveShipIslands(this.islands, ship);
+      // Running aground is fatal — islands are obstacles, not bumpers.
+      if (ship.alive && shipHitsIsland(this.islands, ship)) {
+        while (ship.alive) ship.takeHit();
+        this.pendingEvents.push({ e: 'hit', x: ship.x, y: ship.y });
+      }
     });
 
     if (this.phase === 'battle') {
@@ -508,14 +512,24 @@ export class MpSession {
     // Apply this tick's events locally (sounds + effects), then queue for guests.
     if (this.pendingEvents.length > 0) this.applyEvents(this.pendingEvents);
 
-    // Round end: one ship (or none) left afloat.
+    // Round end: one ship left afloat — or every human captain is dead
+    // (nobody wants to spectate bots finishing each other off).
     if (this.phase === 'battle') {
       const alive = this.ships.filter((s) => s.alive).length;
-      if (alive <= 1 && this.endTimer < 0) this.endTimer = END_DELAY;
+      const humansAlive = this.players.some((p, i) => !p.bot && this.ships[i].alive);
+      if ((alive <= 1 || !humansAlive) && this.endTimer < 0) this.endTimer = END_DELAY;
       if (this.endTimer >= 0) {
         this.endTimer -= dt;
         if (this.endTimer <= 0) {
-          const winner = this.ships.findIndex((s) => s.alive);
+          // Healthiest survivor takes the win (covers multiple bots surviving).
+          let winner = -1;
+          let best = 0;
+          this.ships.forEach((s, i) => {
+            if (s.alive && s.health > best) {
+              best = s.health;
+              winner = i;
+            }
+          });
           this.sendSnapshot(); // final positions, fully sunk hulls
           this.broadcast({ t: 'end', winner });
           this.phase = 'end';

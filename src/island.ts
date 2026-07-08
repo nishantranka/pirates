@@ -189,21 +189,16 @@ export function segmentHitsIsland(
   return false;
 }
 
-/** Push a ship out of any island it overlaps so hulls slide along the shore. */
-export function resolveShipIslands(
+/** Does the ship's hull touch any island? Running aground is fatal. */
+export function shipHitsIsland(
   islands: IslandData[],
   ship: { x: number; y: number; width: number },
-) {
+): boolean {
   const pad = ship.width * 0.55;
   for (const island of islands) {
     for (const c of island.circles) {
-      const dx = ship.x - c.x;
-      const dy = ship.y - c.y;
-      const d = Math.hypot(dx, dy);
-      const min = c.r + pad;
-      if (d >= min || d === 0) continue;
-      ship.x = c.x + (dx / d) * min;
-      ship.y = c.y + (dy / d) * min;
+      if (Math.hypot(ship.x - c.x, ship.y - c.y) < c.r + pad) return true;
     }
   }
+  return false;
 }

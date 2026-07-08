@@ -19,7 +19,8 @@ battle once 2–4 players are in.
 
 - **Free-for-all** — last ship afloat rules the seas. Sink or be sunk.
 - **Islands & shallows** — cannonballs splash harmlessly into the sand, so use
-  islands as cover; hulls slide along the shore instead of running aground.
+  islands as cover. But mind your helm: **running aground is fatal** — steer
+  into an island and your ship goes down with all hands.
 - **Shared world** — everyone plays in the same fixed 1600×1000 arena,
   letterboxed to fit each screen. Wind affects all captains equally.
 - **Host-authoritative netcode** — the room creator simulates the battle and
@@ -32,6 +33,9 @@ battle once 2–4 players are in.
   an island blocks the shot, and when wounded they break off and run for
   cover, favoring fast points of sail and keeping islands between themselves
   and the threat.
+- The round ends when one ship is left afloat — or when **every human captain
+  is dead** (you never spectate bots finishing each other off; the healthiest
+  survivor takes the win).
 - After a battle the host can call a **rematch** (fresh islands) or send
   everyone **back to the lobby**. If a captain drops mid-fight, their ship
   strikes its colors and sinks.

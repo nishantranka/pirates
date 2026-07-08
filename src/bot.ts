@@ -17,7 +17,7 @@ const BROADSIDE_RANGE = 280; // px; inside this, turn to bring the guns to bear
 const FIRE_RANGE = 300; // px
 const FIRE_CONE = 0.25; // rad off perfect broadside alignment
 const UPWIND_CONE = 0.6; // rad; don't chase straight into the wind
-const LOOKAHEAD = 95; // px ahead scanned for islands
+const LOOKAHEAD = 125; // px ahead scanned for islands (grounding is fatal)
 const FLEE_TRIGGER = 340; // px; threat distance that makes a wounded bot run
 const FLEE_HEALTH = 0.4; // flee at/below this health fraction (min 2 points)
 
