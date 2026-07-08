@@ -18,9 +18,10 @@ lobby every captain chooses their own boat and readies up; the host starts the
 battle once 2–4 players are in.
 
 - **Free-for-all** — last ship afloat rules the seas. Sink or be sunk.
-- **Islands & shallows** — cannonballs splash harmlessly into the sand, so use
-  islands as cover. But mind your helm: **running aground is fatal** — steer
-  into an island and your ship goes down with all hands.
+- **Islands & shallows** — Minecraft-style blocky islands: a ring of
+  translucent shallow-water blocks warns you, then solid sand means death —
+  **running aground is fatal**. Cannonballs splash harmlessly into the sand,
+  so islands double as cover.
 - **Shared world** — everyone plays in the same fixed 1600×1000 arena,
   letterboxed to fit each screen. Wind affects all captains equally.
 - **Host-authoritative netcode** — the room creator simulates the battle and

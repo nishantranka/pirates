@@ -99,57 +99,132 @@ function makePalms(circles: IslandCircle[]): Palm[] {
   return palms;
 }
 
+// ── Blocky (Minecraft-style) rendering ────────────────────────────────────────
+// Islands rasterize onto a world-aligned tile grid so the coastline is a hard,
+// readable edge: one ring of translucent "shallow water" blocks warns you,
+// then solid sand/grass blocks mean death. Tiles derive deterministically
+// from the island data (coordinate hash, no RNG), so every peer renders the
+// exact same terrain. Rasterization is cached per island.
+
+const TILE = 18;
+
+interface Tile {
+  px: number; // top-left corner, world coords
+  py: number;
+  kind: 'shallow' | 'sand' | 'sand2' | 'grass' | 'grass2';
+}
+
+const TILE_COLORS: Record<Tile['kind'], string> = {
+  shallow: 'rgba(130, 205, 228, 0.45)',
+  sand: '#e3d08f',
+  sand2: '#d8c37e',
+  grass: '#7cb850',
+  grass2: '#66a03e',
+};
+
+const OUTLINE_COLOR = '#463320'; // dark grout between blocks + silhouette border
+
+const tileCache = new WeakMap<IslandData, Tile[]>();
+
+/** Deterministic pseudo-random in [0,1) from tile coordinates. */
+function hash2(x: number, y: number): number {
+  let h = (x * 374761393 + y * 668265263) | 0;
+  h = ((h ^ (h >>> 13)) * 1274126177) | 0;
+  return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+}
+
+/** How far inside the island a point is (px); negative = open water. */
+function depthInside(island: IslandData, x: number, y: number): number {
+  let best = -Infinity;
+  for (const c of island.circles) {
+    best = Math.max(best, c.r - Math.hypot(x - c.x, y - c.y));
+  }
+  return best;
+}
+
+function tilesFor(island: IslandData): Tile[] {
+  const cached = tileCache.get(island);
+  if (cached) return cached;
+
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (const c of island.circles) {
+    minX = Math.min(minX, c.x - c.r);
+    minY = Math.min(minY, c.y - c.r);
+    maxX = Math.max(maxX, c.x + c.r);
+    maxY = Math.max(maxY, c.y + c.r);
+  }
+
+  const tiles: Tile[] = [];
+  const tx0 = Math.floor((minX - TILE * 1.5) / TILE);
+  const ty0 = Math.floor((minY - TILE * 1.5) / TILE);
+  const tx1 = Math.ceil((maxX + TILE * 1.5) / TILE);
+  const ty1 = Math.ceil((maxY + TILE * 1.5) / TILE);
+
+  for (let ty = ty0; ty <= ty1; ty++) {
+    for (let tx = tx0; tx <= tx1; tx++) {
+      const cx = tx * TILE + TILE / 2;
+      const cy = ty * TILE + TILE / 2;
+      const d = depthInside(island, cx, cy);
+      let kind: Tile['kind'] | null = null;
+      if (d >= TILE * 1.6) {
+        kind = hash2(tx, ty) < 0.3 ? 'grass2' : 'grass';
+      } else if (d >= 0) {
+        kind = hash2(tx, ty) < 0.4 ? 'sand2' : 'sand';
+      } else if (d >= -TILE * 1.15) {
+        kind = 'shallow';
+      }
+      if (kind) tiles.push({ px: tx * TILE, py: ty * TILE, kind });
+    }
+  }
+
+  tileCache.set(island, tiles);
+  return tiles;
+}
+
 export function drawIsland(ctx: CanvasRenderingContext2D, island: IslandData) {
-  // Shallow water halo.
-  ctx.fillStyle = 'rgba(125, 195, 220, 0.35)';
-  for (const c of island.circles) {
-    ctx.beginPath();
-    ctx.arc(c.x, c.y, c.r * 1.4, 0, Math.PI * 2);
-    ctx.fill();
+  const tiles = tilesFor(island);
+
+  // Shallow warning ring: translucent blocky water, no outline.
+  ctx.fillStyle = TILE_COLORS.shallow;
+  for (const t of tiles) {
+    if (t.kind === 'shallow') ctx.fillRect(t.px + 1, t.py + 1, TILE - 2, TILE - 2);
   }
 
-  // Sand.
-  for (const c of island.circles) {
-    ctx.beginPath();
-    ctx.arc(c.x, c.y, c.r, 0, Math.PI * 2);
-    ctx.fillStyle = '#dcc687';
-    ctx.fill();
-    ctx.strokeStyle = 'rgba(90, 70, 35, 0.45)';
-    ctx.lineWidth = 2;
-    ctx.stroke();
+  // Dark base layer under every land block → silhouette border + grout lines.
+  ctx.fillStyle = OUTLINE_COLOR;
+  for (const t of tiles) {
+    if (t.kind !== 'shallow') ctx.fillRect(t.px - 2, t.py - 2, TILE + 4, TILE + 4);
   }
 
-  // Grass caps on the larger lobes.
-  ctx.fillStyle = '#8fae5b';
-  for (const c of island.circles) {
-    if (c.r < 42) continue;
-    ctx.beginPath();
-    ctx.arc(c.x, c.y, c.r * 0.55, 0, Math.PI * 2);
-    ctx.fill();
+  // Land blocks, inset so the dark base shows through as seams.
+  for (const t of tiles) {
+    if (t.kind === 'shallow') continue;
+    ctx.fillStyle = TILE_COLORS[t.kind];
+    ctx.fillRect(t.px + 1, t.py + 1, TILE - 2, TILE - 2);
   }
 
-  // Palm trees: a leaning trunk with a burst of fronds.
+  // Blocky trees: brown trunk block with a plus-shaped leaf canopy.
   for (const p of island.palms) {
-    ctx.strokeStyle = '#6b4a2a';
-    ctx.lineWidth = 3;
-    ctx.beginPath();
-    ctx.moveTo(p.x, p.y + 7);
-    ctx.lineTo(p.x + 4, p.y - 9);
-    ctx.stroke();
+    const tx = Math.floor(p.x / TILE) * TILE;
+    const ty = Math.floor(p.y / TILE) * TILE;
 
-    ctx.strokeStyle = '#3e7d3a';
-    ctx.lineWidth = 2.5;
-    for (let i = 0; i < 5; i++) {
-      const a = p.a + (i / 5) * Math.PI * 2;
-      ctx.beginPath();
-      ctx.moveTo(p.x + 4, p.y - 9);
-      ctx.quadraticCurveTo(
-        p.x + 4 + Math.cos(a) * 7,
-        p.y - 9 + Math.sin(a) * 7 - 3,
-        p.x + 4 + Math.cos(a) * 12,
-        p.y - 9 + Math.sin(a) * 12,
-      );
-      ctx.stroke();
+    ctx.fillStyle = '#6b4a2a';
+    ctx.fillRect(tx + 4, ty + 4, TILE - 8, TILE - 8);
+
+    const leaves: Array<[number, number]> = [
+      [0, -TILE],
+      [-TILE, 0],
+      [TILE, 0],
+      [0, TILE],
+      [0, 0],
+    ];
+    for (const [ox, oy] of leaves) {
+      ctx.fillStyle = hash2((tx + ox) / TILE, (ty + oy) / TILE) < 0.5 ? '#3e7d3a' : '#356e33';
+      const inset = ox === 0 && oy === 0 ? 5 : 3;
+      ctx.fillRect(tx + ox + inset, ty + oy + inset, TILE - inset * 2, TILE - inset * 2);
     }
   }
 }
