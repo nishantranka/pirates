@@ -1,5 +1,7 @@
 import { Game, DIFFICULTIES, type DifficultyName } from './game';
 import { Input } from './input';
+import { MpSession } from './multiplayer';
+import { CODE_LENGTH, type LobbyPlayerInfo } from './net';
 import { SHIP_TYPES, type ShipTypeName } from './ship';
 import './style.css';
 
@@ -57,7 +59,7 @@ const SHIP_ORDER: ShipTypeName[] = ['small', 'medium', 'large'];
 
 // ── Selection state ───────────────────────────────────────────────────────────
 
-type GameMode = 'normal' | 'survivor';
+type GameMode = 'normal' | 'survivor' | 'multiplayer';
 let selectedMode: GameMode = 'normal';
 let selectedPlayer: ShipTypeName = 'small';
 let selectedEnemy: ShipTypeName | 'random' = 'random';
@@ -87,10 +89,15 @@ function selectCard(row: Element, key: string) {
 // Game mode cards
 const modeRow = document.getElementById('mode-cards')!;
 const enemySection = document.getElementById('enemy-section')!;
+const playerSection = document.getElementById('player-section')!;
+const difficultySection = document.getElementById('difficulty-section')!;
+const mpSection = document.getElementById('mp-section')!;
+const setSailBtn = document.getElementById('set-sail')!;
 
-const modeOptions: Array<{ key: GameMode; label: string; stat: string; disabled?: boolean }> = [
+const modeOptions: Array<{ key: GameMode; label: string; stat: string }> = [
   { key: 'normal', label: 'Normal', stat: 'one battle · win or lose' },
   { key: 'survivor', label: 'Survivor', stat: 'fight until you sink' },
+  { key: 'multiplayer', label: 'Multiplayer', stat: 'up to 4 players · online' },
 ];
 
 modeOptions.forEach(({ key, label, stat }) => {
@@ -103,19 +110,15 @@ modeOptions.forEach(({ key, label, stat }) => {
   modeRow.appendChild(card);
 });
 
-// Multiplayer — greyed out placeholder
-const multiCard = makeCard('Multiplayer', 'coming soon', 'multiplayer');
-multiCard.classList.add('disabled');
-modeRow.appendChild(multiCard);
-
 selectCard(modeRow, selectedMode);
 
 function updateModeUI() {
-  if (selectedMode === 'survivor') {
-    enemySection.classList.add('hidden');
-  } else {
-    enemySection.classList.remove('hidden');
-  }
+  const mp = selectedMode === 'multiplayer';
+  playerSection.classList.toggle('hidden', mp);
+  difficultySection.classList.toggle('hidden', mp);
+  enemySection.classList.toggle('hidden', mp || selectedMode === 'survivor');
+  mpSection.classList.toggle('hidden', !mp);
+  setSailBtn.classList.toggle('hidden', mp);
 }
 
 // Player ship cards
@@ -196,6 +199,7 @@ function startSurvivor() {
 }
 
 function setSail() {
+  if (selectedMode === 'multiplayer') return;
   menuOverlay.classList.add('hidden');
   if (selectedMode === 'survivor') {
     startSurvivor();
@@ -281,3 +285,192 @@ window.addEventListener('keydown', (e) => {
     }
   }
 });
+
+// ── Multiplayer ───────────────────────────────────────────────────────────────
+
+const mpNameInput = document.getElementById('mp-name') as HTMLInputElement;
+const mpCodeInput = document.getElementById('mp-code') as HTMLInputElement;
+const mpCreateBtn = document.getElementById('mp-create') as HTMLButtonElement;
+const mpJoinBtn = document.getElementById('mp-join') as HTMLButtonElement;
+const mpStatus = document.getElementById('mp-status')!;
+
+const lobbyOverlay = document.getElementById('lobby-overlay')!;
+const roomCodeEl = document.getElementById('room-code')!;
+const lobbyPlayersEl = document.getElementById('lobby-players')!;
+const lobbyShipRow = document.getElementById('lobby-ship-cards')!;
+const btnReady = document.getElementById('btn-ready') as HTMLButtonElement;
+const btnStart = document.getElementById('btn-start') as HTMLButtonElement;
+const btnLeave = document.getElementById('btn-leave')!;
+
+const mpendOverlay = document.getElementById('mpend-overlay')!;
+const mpendTitle = document.getElementById('mpend-title')!;
+const btnRematch = document.getElementById('btn-rematch')!;
+const btnToLobby = document.getElementById('btn-tolobby')!;
+const btnMpLeave = document.getElementById('btn-mpleave')!;
+const mpendWait = document.getElementById('mpend-wait')!;
+
+const MP_COLORS = ['#8b5a2b', '#7a1f1f', '#2e5d34', '#4a3d7a'];
+
+let mp: MpSession | null = null;
+let myReady = false;
+let myShip: ShipTypeName = 'small';
+
+// Ship cards inside the lobby — each captain picks their own boat.
+(Object.keys(SHIP_TYPES) as ShipTypeName[]).forEach((type) => {
+  const s = SHIP_TYPES[type];
+  const card = makeCard(
+    type[0].toUpperCase() + type.slice(1),
+    `${s.guns} guns · ${SPEED_LABELS[type]} · ${s.maxHealth} hp`,
+    type,
+  );
+  card.addEventListener('click', () => {
+    myShip = type;
+    selectCard(lobbyShipRow, type);
+    mp?.setShip(type);
+  });
+  lobbyShipRow.appendChild(card);
+});
+
+function renderLobby(players: LobbyPlayerInfo[], you: number, canStart: boolean) {
+  lobbyPlayersEl.innerHTML = '';
+  players.forEach((p, i) => {
+    const row = document.createElement('div');
+    row.className = 'lobby-player' + (i === you ? ' you' : '');
+
+    const dot = document.createElement('span');
+    dot.className = 'dot';
+    dot.style.background = MP_COLORS[i];
+
+    const name = document.createElement('span');
+    name.className = 'pname';
+    name.textContent = p.name + (i === you ? ' (you)' : '') + (i === 0 ? ' ⚓' : '');
+
+    const ship = document.createElement('span');
+    ship.className = 'pship';
+    ship.textContent = p.ship;
+
+    const ready = document.createElement('span');
+    ready.className = 'pready' + (p.ready ? ' is-ready' : '');
+    ready.textContent = p.ready ? 'READY' : 'waiting';
+
+    row.append(dot, name, ship, ready);
+    lobbyPlayersEl.appendChild(row);
+  });
+
+  // Mirror our own state (authoritative from the host).
+  const me = players[you];
+  if (me) {
+    myReady = me.ready;
+    myShip = me.ship;
+    selectCard(lobbyShipRow, myShip);
+  }
+  btnReady.textContent = myReady ? 'Not Ready' : "I'm Ready";
+  btnReady.classList.toggle('armed', myReady);
+
+  const isHost = mp?.isHost ?? false;
+  btnStart.classList.toggle('hidden', !isHost);
+  btnStart.disabled = !canStart;
+
+  const lobbyStatus = document.getElementById('lobby-status')!;
+  if (players.length < 2) {
+    lobbyStatus.textContent = 'Waiting for at least one more captain…';
+  } else if (!canStart) {
+    lobbyStatus.textContent = 'Waiting for everyone to be ready…';
+  } else {
+    lobbyStatus.textContent = isHost ? 'All hands ready — start when you like!' : 'All ready — the host can start.';
+  }
+}
+
+function endMpSession(errorMessage?: string) {
+  mp?.leave();
+  mp = null;
+  myReady = false;
+  game.suspended = false;
+  lobbyOverlay.classList.add('hidden');
+  mpendOverlay.classList.add('hidden');
+  menuOverlay.classList.remove('hidden');
+  mpStatus.textContent = errorMessage ?? '';
+  mpCreateBtn.disabled = false;
+  mpJoinBtn.disabled = false;
+}
+
+function mpCallbacks() {
+  return {
+    onRoomReady(code: string) {
+      mpStatus.textContent = '';
+      roomCodeEl.textContent = code;
+      menuOverlay.classList.add('hidden');
+      lobbyOverlay.classList.remove('hidden');
+      mpCreateBtn.disabled = false;
+      mpJoinBtn.disabled = false;
+    },
+    onLobby(players: LobbyPlayerInfo[], you: number, canStart: boolean) {
+      renderLobby(players, you, canStart);
+    },
+    onStart() {
+      lobbyOverlay.classList.add('hidden');
+      mpendOverlay.classList.add('hidden');
+      game.suspended = true;
+    },
+    onEnd(winnerName: string | null) {
+      mpendTitle.textContent = winnerName ? `☠️ ${winnerName} rules the seas!` : 'Mutual destruction — a draw!';
+      const isHost = mp?.isHost ?? false;
+      btnRematch.classList.toggle('hidden', !isHost);
+      btnToLobby.classList.toggle('hidden', !isHost);
+      mpendWait.classList.toggle('hidden', isHost);
+      mpendOverlay.classList.remove('hidden');
+    },
+    onToLobby() {
+      mpendOverlay.classList.add('hidden');
+      game.suspended = false;
+      lobbyOverlay.classList.remove('hidden');
+    },
+    onError(message: string) {
+      endMpSession(message);
+    },
+  };
+}
+
+mpCreateBtn.addEventListener('click', () => {
+  if (mp) return;
+  mpStatus.textContent = 'Opening room…';
+  mpCreateBtn.disabled = true;
+  mpJoinBtn.disabled = true;
+  mp = MpSession.host(mpNameInput.value, ctx, input, mpCallbacks(), {
+    fire: playCannonFire,
+    hit: playExplosion,
+  });
+});
+
+mpJoinBtn.addEventListener('click', () => {
+  if (mp) return;
+  const code = mpCodeInput.value.toUpperCase().trim();
+  if (code.length !== CODE_LENGTH) {
+    mpStatus.textContent = `Room codes are ${CODE_LENGTH} characters.`;
+    return;
+  }
+  mpStatus.textContent = 'Joining…';
+  mpCreateBtn.disabled = true;
+  mpJoinBtn.disabled = true;
+  mp = MpSession.join(code, mpNameInput.value, ctx, input, mpCallbacks(), {
+    fire: playCannonFire,
+    hit: playExplosion,
+  });
+});
+
+mpCodeInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') mpJoinBtn.click();
+});
+
+btnReady.addEventListener('click', () => {
+  myReady = !myReady;
+  btnReady.textContent = myReady ? 'Not Ready' : "I'm Ready";
+  btnReady.classList.toggle('armed', myReady);
+  mp?.setReady(myReady);
+});
+
+btnStart.addEventListener('click', () => mp?.startBattle());
+btnLeave.addEventListener('click', () => endMpSession());
+btnRematch.addEventListener('click', () => mp?.rematch());
+btnToLobby.addEventListener('click', () => mp?.backToLobby());
+btnMpLeave.addEventListener('click', () => endMpSession());

@@ -59,6 +59,8 @@ export class Game {
   onHit: (() => void) | null = null;
   /** When non-null (survivor mode), renders the kill count in the HUD. */
   survivorKills: number | null = null;
+  /** While true another renderer (multiplayer) owns the canvas; this loop idles. */
+  suspended = false;
 
   private readonly isTouchDevice = navigator.maxTouchPoints > 0;
   private btnLeft!: BtnRect;
@@ -176,9 +178,11 @@ export class Game {
   private frame = (now: number) => {
     const dt = Math.min((now - this.lastTime) / 1000, MAX_DT);
     this.lastTime = now;
-    this.update(dt);
-    this.input.clearPressed();
-    this.render();
+    if (!this.suspended) {
+      this.update(dt);
+      this.input.clearPressed();
+      this.render();
+    }
     requestAnimationFrame(this.frame);
   };
 

@@ -5,6 +5,8 @@ export class Input {
 
   constructor() {
     window.addEventListener('keydown', (e) => {
+      // Don't capture (or block) keys while the user types in a form field.
+      if (e.target instanceof HTMLInputElement) return;
       this.down.add(e.code);
       if (!e.repeat) this.justPressed.add(e.code);
       // Keep Space/arrows from scrolling the page.

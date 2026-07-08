@@ -26,22 +26,79 @@
           <div class="section-label">Game mode</div>
           <div class="card-row" id="mode-cards"></div>
 
-          <div class="section-label">Your ship</div>
-          <div class="card-row" id="player-cards"></div>
+          <div id="player-section">
+            <div class="section-label">Your ship</div>
+            <div class="card-row" id="player-cards"></div>
+          </div>
 
           <div id="enemy-section">
             <div class="section-label">Enemy ship</div>
             <div class="card-row" id="enemy-cards"></div>
           </div>
 
-          <div class="section-label">Difficulty</div>
-          <div class="card-row" id="difficulty-cards"></div>
+          <div id="difficulty-section">
+            <div class="section-label">Difficulty</div>
+            <div class="card-row" id="difficulty-cards"></div>
+          </div>
+
+          <!-- Online multiplayer setup: create a room or join with a code -->
+          <div id="mp-section" class="hidden">
+            <div class="section-label">Captain name</div>
+            <input id="mp-name" class="mp-input" maxlength="16" placeholder="Captain" autocomplete="off" />
+            <div class="mp-actions">
+              <button id="mp-create" class="mp-btn">Create Room</button>
+              <span class="mp-or">— or —</span>
+              <input id="mp-code" class="mp-input mp-code" maxlength="5" placeholder="CODE" autocomplete="off" />
+              <button id="mp-join" class="mp-btn">Join</button>
+            </div>
+            <div id="mp-status" class="mp-status"></div>
+          </div>
         </div>
 
         <div class="modal-footer">
           <button id="set-sail">⚓ Set Sail</button>
           <div class="hint">← → or A D to steer &nbsp;·&nbsp; Space to fire</div>
         </div>
+      </div>
+    </div>
+
+    <!-- Multiplayer lobby: shown after creating or joining a room -->
+    <div id="lobby-overlay" class="hidden">
+      <div class="modal lobby-modal">
+        <div class="modal-scroll">
+          <h1>Ship's Muster</h1>
+
+          <div class="section-label">Room code — share it with your crew</div>
+          <div id="room-code" class="room-code"></div>
+
+          <div class="section-label">Captains</div>
+          <div id="lobby-players" class="lobby-players"></div>
+
+          <div class="section-label">Your ship</div>
+          <div class="card-row" id="lobby-ship-cards"></div>
+        </div>
+
+        <div class="modal-footer">
+          <div class="lobby-buttons">
+            <button id="btn-ready">I'm Ready</button>
+            <button id="btn-start" class="hidden">⚓ Start Battle</button>
+            <button id="btn-leave">Leave</button>
+          </div>
+          <div class="hint" id="lobby-status">Waiting for players…</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Multiplayer battle result -->
+    <div id="mpend-overlay" class="hidden">
+      <div class="gameover-panel">
+        <div id="mpend-title"></div>
+        <div class="gameover-buttons">
+          <button id="btn-rematch" class="hidden">Rematch</button>
+          <button id="btn-tolobby" class="hidden">Back to Lobby</button>
+          <button id="btn-mpleave">Leave Game</button>
+        </div>
+        <div class="hint hidden" id="mpend-wait">Waiting for the host to choose…</div>
       </div>
     </div>
 

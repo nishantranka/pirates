@@ -11,5 +11,21 @@
   "devDependencies": {
     "typescript": "~6.0.2",
     "vite": "^8.0.12"
-  }
+  },
+  "dependencies": {
+    "peerjs": "^1.5.5"
+  },
+  "description": "A top-down naval combat game for the browser, inspired by the ship battles in\r [Sid Meier's Pirates!](https://sidmeierspirates.fandom.com/wiki/Naval_Combat).\r Built with HTML5 Canvas and TypeScript — no game framework, no backend, the\r whole game runs in the front end.",
+  "main": "index.js",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/piwodlaiwo/pirates.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/piwodlaiwo/pirates/issues"
+  },
+  "homepage": "https://github.com/piwodlaiwo/pirates#readme"
 }

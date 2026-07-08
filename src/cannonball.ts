@@ -9,8 +9,8 @@ export class Cannonball {
   spent = false;
   readonly owner: Ship;
 
-  private vx: number;
-  private vy: number;
+  readonly vx: number;
+  readonly vy: number;
   private traveled = 0;
 
   constructor(x: number, y: number, direction: number, owner: Ship) {

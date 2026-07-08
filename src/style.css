@@ -20,7 +20,9 @@ canvas {
 /* ── Overlays ─────────────────────────────────────────────────────────────── */
 
 #menu-overlay,
-#gameover-overlay {
+#gameover-overlay,
+#lobby-overlay,
+#mpend-overlay {
   position: absolute;
   inset: 0;
   z-index: 10;
@@ -37,8 +39,13 @@ canvas {
   background-color: rgba(0, 0, 0, 0.35);
 }
 
-#gameover-overlay {
+#gameover-overlay,
+#mpend-overlay {
   background: rgba(0, 0, 0, 0.6);
+}
+
+#lobby-overlay {
+  background: rgba(0, 0, 0, 0.45);
 }
 
 .hidden {
@@ -179,6 +186,206 @@ canvas {
   .section-label {
     margin: 10px 0 6px;
   }
+}
+
+/* ── Multiplayer setup & lobby ────────────────────────────────────────────── */
+
+.mp-input {
+  background: rgba(255, 255, 255, 0.08);
+  border: 2px solid rgba(255, 255, 255, 0.18);
+  border-radius: 10px;
+  color: #fff;
+  font-family: inherit;
+  font-size: 15px;
+  padding: 9px 12px;
+  text-align: center;
+  min-height: 44px;
+  width: 200px;
+}
+
+.mp-input:focus {
+  outline: none;
+  border-color: #fff;
+}
+
+.mp-code {
+  width: 110px;
+  text-transform: uppercase;
+  letter-spacing: 0.2em;
+  font-weight: 700;
+}
+
+.mp-actions {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.mp-or {
+  color: rgba(255, 255, 255, 0.4);
+  font-size: 12px;
+}
+
+.mp-btn {
+  padding: 10px 22px;
+  font-size: 15px;
+  font-weight: 700;
+  font-family: inherit;
+  background: #c8860a;
+  color: #fff;
+  border: none;
+  border-radius: 10px;
+  cursor: pointer;
+  min-height: 44px;
+  transition: background 0.12s;
+}
+
+.mp-btn:active {
+  background: #a06c07;
+}
+
+.mp-status {
+  margin-top: 12px;
+  min-height: 18px;
+  font-size: 13px;
+  color: #ffb0a0;
+}
+
+.room-code {
+  font-size: clamp(28px, 5vw, 40px);
+  font-weight: 800;
+  letter-spacing: 0.35em;
+  color: #ffd75e;
+  margin: 2px 0 6px;
+  user-select: all;
+}
+
+.lobby-players {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-width: 460px;
+  margin: 0 auto;
+}
+
+.lobby-player {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: rgba(255, 255, 255, 0.07);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 10px;
+  padding: 8px 14px;
+  font-size: 14px;
+  text-align: left;
+}
+
+.lobby-player.you {
+  border-color: #ffd75e;
+}
+
+.lobby-player .dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+
+.lobby-player .pname {
+  font-weight: 700;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lobby-player .pship {
+  color: rgba(255, 255, 255, 0.65);
+  font-size: 12px;
+}
+
+.lobby-player .pready {
+  font-size: 12px;
+  font-weight: 700;
+  color: rgba(255, 255, 255, 0.4);
+}
+
+.lobby-player .pready.is-ready {
+  color: #6fdc76;
+}
+
+.lobby-buttons {
+  display: flex;
+  gap: 10px;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+
+.lobby-buttons button {
+  padding: 12px 24px;
+  font-size: 16px;
+  font-weight: 700;
+  font-family: inherit;
+  border: none;
+  border-radius: 10px;
+  cursor: pointer;
+  min-height: 48px;
+  transition: filter 0.12s;
+}
+
+.lobby-buttons button:active {
+  filter: brightness(0.85);
+}
+
+#btn-ready {
+  background: #2e7d32;
+  color: #fff;
+}
+
+#btn-ready.armed {
+  background: rgba(255, 255, 255, 0.15);
+  border: 1px solid rgba(255, 255, 255, 0.3);
+}
+
+#btn-start {
+  background: #c8860a;
+  color: #fff;
+}
+
+#btn-start:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+#btn-leave,
+#btn-mpleave {
+  background: rgba(255, 255, 255, 0.15);
+  color: #fff;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+}
+
+#mpend-title {
+  font-size: clamp(24px, 5vw, 44px);
+  font-weight: 700;
+  margin-bottom: 28px;
+  color: #fff;
+}
+
+#btn-rematch {
+  background: #2e7d32;
+  color: #fff;
+}
+
+#btn-tolobby {
+  background: #c8860a;
+  color: #fff;
+}
+
+#mpend-wait {
+  margin-top: 16px;
 }
 
 /* ── Game-over panel ──────────────────────────────────────────────────────── */

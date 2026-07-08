@@ -5,6 +5,31 @@ A top-down naval combat game for the browser, inspired by the ship battles in
 Built with HTML5 Canvas and TypeScript — no game framework, no backend, the
 whole game runs in the front end.
 
+**This fork adds online multiplayer**: up to 4 players battle in a shared
+free-for-all arena dotted with islands to hide behind. No server of your own
+needed — peers connect directly over WebRTC ([PeerJS](https://peerjs.com/)),
+so it still deploys as plain static files.
+
+## Multiplayer
+
+Pick **Multiplayer** on the menu, enter a captain name, and either **Create
+Room** (you get a 5-letter room code) or **Join** with a friend's code. In the
+lobby every captain chooses their own boat and readies up; the host starts the
+battle once 2–4 players are in.
+
+- **Free-for-all** — last ship afloat rules the seas. Sink or be sunk.
+- **Islands & shallows** — cannonballs splash harmlessly into the sand, so use
+  islands as cover; hulls slide along the shore instead of running aground.
+- **Shared world** — everyone plays in the same fixed 1600×1000 arena,
+  letterboxed to fit each screen. Wind affects all captains equally.
+- **Host-authoritative netcode** — the room creator simulates the battle and
+  broadcasts 30 Hz snapshots; guests send steering/fire inputs and render with
+  smoothing. Rooms are matched through the free public PeerJS broker, then all
+  game traffic flows peer-to-peer.
+- After a battle the host can call a **rematch** (fresh islands) or send
+  everyone **back to the lobby**. If a captain drops mid-fight, their ship
+  strikes its colors and sinks.
+
 ## How to play
 
 | Key | Action |
@@ -80,10 +105,13 @@ cannonball still deals 1 damage.
 ## Project structure
 
 ```
-src/main.ts        entry point: canvas setup, resize handling
-src/game.ts        game loop, ship select screen, firing, collisions, HUD
+src/main.ts        entry point: canvas setup, menu/lobby UI wiring
+src/game.ts        single-player game loop, firing, collisions, HUD
+src/multiplayer.ts online session: lobby, host simulation, guest rendering
+src/net.ts         PeerJS transport + wire message types
+src/island.ts      island generation, drawing, ship/cannonball collision
 src/ship.ts        Ship class + SHIP_TYPES stat table
-src/ai.ts          enemy steering and fire decisions
+src/ai.ts          enemy steering and fire decisions (single player)
 src/cannonball.ts  projectile movement and rendering
 src/explosion.ts   impact explosion effect
 src/wind.ts        wind direction drift + point-of-sail speed curve
