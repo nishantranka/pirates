@@ -296,6 +296,7 @@ const mpStatus = document.getElementById('mp-status')!;
 
 const lobbyOverlay = document.getElementById('lobby-overlay')!;
 const roomCodeEl = document.getElementById('room-code')!;
+const roomCodeLabel = document.getElementById('room-code-label')!;
 const lobbyPlayersEl = document.getElementById('lobby-players')!;
 const lobbyShipRow = document.getElementById('lobby-ship-cards')!;
 const btnReady = document.getElementById('btn-ready') as HTMLButtonElement;
@@ -416,11 +417,24 @@ function mpCallbacks() {
   return {
     onRoomReady(code: string) {
       mpStatus.textContent = '';
-      roomCodeEl.textContent = code;
+      roomCodeEl.textContent = code || 'connecting…';
+      roomCodeLabel.textContent = code
+        ? 'Room code — share it with your crew'
+        : 'Room code';
       menuOverlay.classList.add('hidden');
       lobbyOverlay.classList.remove('hidden');
       mpCreateBtn.disabled = false;
       mpJoinBtn.disabled = false;
+    },
+    onRoomCode(code: string | null) {
+      if (code) {
+        roomCodeEl.textContent = code;
+        roomCodeLabel.textContent = 'Room code — share it with your crew';
+      } else {
+        // Broker unreachable — solo/bot play still works, just no remote joiners.
+        roomCodeEl.textContent = 'OFFLINE';
+        roomCodeLabel.textContent = 'No connection — add bots to play';
+      }
     },
     onLobby(players: LobbyPlayerInfo[], you: number, canStart: boolean) {
       renderLobby(players, you, canStart);

@@ -137,8 +137,11 @@ interface HostPlayer {
 }
 
 export interface MpCallbacks {
-  /** Room is open (host: code just claimed; guest: joined). */
+  /** In the lobby now. Host: code is '' until the broker responds. Guest: real code. */
   onRoomReady(code: string): void;
+  /** Host only: the shareable code arrived (string), or the broker was
+   *  unreachable so this is an offline, bots-only room (null). */
+  onRoomCode(code: string | null): void;
   onLobby(players: LobbyPlayerInfo[], you: number, canStart: boolean): void;
   onStart(): void;
   /** winnerName null = mutual destruction. */
@@ -227,14 +230,23 @@ export class MpSession {
     s.players = [
       { conn: null, name: cleanName(name), ship: 'small', ready: false, connected: true, bot: false, turn: 0, fire: false },
     ];
+    // Open the lobby immediately so bot play never waits on (or requires) the
+    // matchmaking broker; the room code fills in when/if the broker responds.
+    // Deferred a microtask so the caller's `mp = MpSession.host(...)` binding
+    // is in place before the UI callbacks (which read it) run.
+    s.phase = 'lobby';
+    queueMicrotask(() => {
+      if (!s.active) return;
+      cb.onRoomReady('');
+      s.pushLobby();
+    });
     s.handle = createHostPeer({
-      onReady: (code) => {
-        s.phase = 'lobby';
-        cb.onRoomReady(code);
-        s.pushLobby();
-      },
+      onReady: (code) => cb.onRoomCode(code),
       onConnection: (conn) => s.acceptConnection(conn),
-      onError: (msg) => s.fail(msg),
+      onError: (msg, recoverable) => {
+        if (recoverable) cb.onRoomCode(null); // offline: keep playing vs bots
+        else s.fail(msg);
+      },
     });
     return s;
   }
@@ -538,7 +550,7 @@ export class MpSession {
         if (ship === ball.owner || !ship.alive) continue;
         if (ship.containsPoint(ball.x, ball.y)) {
           ball.spent = true;
-          ship.takeHit();
+          ship.takeHit(ball.damage);
           this.pendingEvents.push({ e: 'hit', x: ball.x, y: ball.y });
           break;
         }
@@ -888,8 +900,13 @@ export class MpSession {
     ctx.fillStyle = 'rgba(0, 0, 0, 0.55)';
     ctx.fillRect(x0 - 1.5, y - 1.5, totalW + 3, segH + 3);
     for (let i = 0; i < n; i++) {
-      ctx.fillStyle = i < ship.health ? col : 'rgba(255, 255, 255, 0.22)';
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.22)';
       ctx.fillRect(x0 + i * (segW + gap), y, segW, segH);
+      const f = Math.max(0, Math.min(1, ship.health - i)); // show fractional damage
+      if (f > 0) {
+        ctx.fillStyle = col;
+        ctx.fillRect(x0 + i * (segW + gap), y, segW * f, segH);
+      }
     }
     ctx.restore();
   }
@@ -933,8 +950,13 @@ export class MpSession {
       ctx.fillRect(x0 - 16, y, 10, segH);
 
       for (let s = 0; s < ship.maxHealth; s++) {
-        ctx.fillStyle = s < ship.health ? '#4caf50' : 'rgba(255, 255, 255, 0.25)';
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.25)';
         ctx.fillRect(x0 + s * (segW + gap), y, segW, segH);
+        const f = Math.max(0, Math.min(1, ship.health - s));
+        if (f > 0) {
+          ctx.fillStyle = '#4caf50';
+          ctx.fillRect(x0 + s * (segW + gap), y, segW * f, segH);
+        }
       }
     });
 

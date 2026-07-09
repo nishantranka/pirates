@@ -28,16 +28,21 @@ export class Cannonball {
     if (this.traveled >= MAX_RANGE) this.spent = true;
   }
 
+  /** Impact falls off with distance flown: point-blank ≈ 1, max range ≈ 0.4. */
+  get damage(): number {
+    return 1 - 0.6 * Math.min(this.traveled / MAX_RANGE, 1);
+  }
+
   draw(ctx: CanvasRenderingContext2D) {
     drawCannonball(ctx, this.x, this.y, this.vx, this.vy);
   }
 }
 
 /**
- * A cannonball in flight, drawn to read clearly against the blue sea: a warm
- * tracer trail behind it, a soft glow, a white-ringed iron body, and a
- * specular highlight. Shared by the host (Cannonball) and the guest renderer
- * (which only has position + velocity).
+ * A shot in flight, drawn as a thin laser bolt oriented along its velocity:
+ * a soft outer glow, a bright mid-beam, a hot white core, and a leading head.
+ * Reads clearly against the sea. Shared by the host (Cannonball) and the guest
+ * renderer (which only has position + velocity).
  */
 export function drawCannonball(
   ctx: CanvasRenderingContext2D,
@@ -50,33 +55,40 @@ export function drawCannonball(
   const ux = vx / sp;
   const uy = vy / sp;
 
-  // Tracer trail.
-  ctx.strokeStyle = 'rgba(255, 214, 120, 0.55)';
-  ctx.lineWidth = 4;
+  const tailX = x - ux * 16;
+  const tailY = y - uy * 16;
+  const headX = x + ux * 3;
+  const headY = y + uy * 3;
+
   ctx.lineCap = 'round';
+
+  // Outer glow.
+  ctx.strokeStyle = 'rgba(255, 90, 40, 0.35)';
+  ctx.lineWidth = 5;
   ctx.beginPath();
-  ctx.moveTo(x - ux * 17, y - uy * 17);
-  ctx.lineTo(x, y);
+  ctx.moveTo(tailX, tailY);
+  ctx.lineTo(headX, headY);
   ctx.stroke();
 
-  // Soft glow.
-  ctx.fillStyle = 'rgba(255, 176, 64, 0.35)';
+  // Bright mid-beam.
+  ctx.strokeStyle = 'rgba(255, 170, 60, 0.85)';
+  ctx.lineWidth = 2.4;
   ctx.beginPath();
-  ctx.arc(x, y, 7.5, 0, Math.PI * 2);
-  ctx.fill();
-
-  // Iron body with a bright outline.
-  ctx.beginPath();
-  ctx.arc(x, y, 4.4, 0, Math.PI * 2);
-  ctx.fillStyle = '#161616';
-  ctx.fill();
-  ctx.strokeStyle = '#ffffff';
-  ctx.lineWidth = 1.6;
+  ctx.moveTo(tailX, tailY);
+  ctx.lineTo(headX, headY);
   ctx.stroke();
 
-  // Highlight.
-  ctx.fillStyle = 'rgba(255, 255, 255, 0.85)';
+  // Hot white core.
+  ctx.strokeStyle = '#fff3c0';
+  ctx.lineWidth = 1;
   ctx.beginPath();
-  ctx.arc(x - ux * 1.2 - 1, y - uy * 1.2 - 1, 1.3, 0, Math.PI * 2);
+  ctx.moveTo(tailX, tailY);
+  ctx.lineTo(headX, headY);
+  ctx.stroke();
+
+  // Leading head.
+  ctx.fillStyle = '#ffffff';
+  ctx.beginPath();
+  ctx.arc(headX, headY, 1.7, 0, Math.PI * 2);
   ctx.fill();
 }

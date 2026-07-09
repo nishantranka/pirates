@@ -58,8 +58,8 @@ export class Ship {
     return this.health > 0;
   }
 
-  takeHit() {
-    this.health = Math.max(0, this.health - 1);
+  takeHit(amount = 1) {
+    this.health = Math.max(0, this.health - amount);
   }
 
   update(dt: number, turn: Turn, worldW: number, worldH: number, speedFactor = 1) {

@@ -235,7 +235,7 @@ export class Game {
       const target = ball.owner === this.player ? this.enemy : this.player;
       if (!ball.spent && target.alive && target.containsPoint(ball.x, ball.y)) {
         ball.spent = true;
-        target.takeHit();
+        target.takeHit(ball.damage);
         this.explosions.push(new Explosion(ball.x, ball.y));
         this.onHit?.();
       }
@@ -351,8 +351,13 @@ export class Game {
     ctx.fillText(label, x0 - 10, y + segH / 2);
 
     for (let i = 0; i < ship.maxHealth; i++) {
-      ctx.fillStyle = i < ship.health ? '#4caf50' : 'rgba(255, 255, 255, 0.25)';
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.25)';
       ctx.fillRect(x0 + i * (segW + gap), y, segW, segH);
+      const f = Math.max(0, Math.min(1, ship.health - i)); // partial-fill the edge pip
+      if (f > 0) {
+        ctx.fillStyle = '#4caf50';
+        ctx.fillRect(x0 + i * (segW + gap), y, segW * f, segH);
+      }
     }
   }
 

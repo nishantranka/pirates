@@ -91,7 +91,9 @@ function randomCode(): string {
 export function createHostPeer(cb: {
   onReady: (code: string) => void;
   onConnection: (conn: DataConnection) => void;
-  onError: (message: string) => void;
+  // recoverable = the signaling server is unreachable; the host can still play
+  // locally against bots, it just can't be joined by remote friends.
+  onError: (message: string, recoverable: boolean) => void;
 }): PeerHandle {
   let peer: Peer | null = null;
   let destroyed = false;
@@ -114,7 +116,13 @@ export function createHostPeer(cb: {
         attempt();
         return;
       }
-      cb.onError(friendly(type));
+      const recoverable =
+        type === 'network' ||
+        type === 'server-error' ||
+        type === 'socket-error' ||
+        type === 'socket-closed' ||
+        type === 'disconnected';
+      cb.onError(friendly(type), recoverable);
     });
   };
   attempt();
