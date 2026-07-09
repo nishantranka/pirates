@@ -1,6 +1,6 @@
 import { Game, DIFFICULTIES, type DifficultyName } from './game';
 import { Input } from './input';
-import { MpSession, MAX_PLAYERS, PLAYER_COLORS } from './multiplayer';
+import { MpSession, MAX_PLAYERS, PLAYER_COLORS, type LeaderboardEntry } from './multiplayer';
 import { CODE_LENGTH, type LobbyPlayerInfo } from './net';
 import { SHIP_TYPES, type ShipTypeName } from './ship';
 import './style.css';
@@ -508,3 +508,68 @@ btnLeave.addEventListener('click', () => endMpSession());
 btnRematch.addEventListener('click', () => mp?.rematch());
 btnToLobby.addEventListener('click', () => mp?.backToLobby());
 btnMpLeave.addEventListener('click', () => endMpSession());
+
+// ── Live leaderboard (collapsible) ────────────────────────────────────────────
+
+const leaderboardEl = document.getElementById('leaderboard')!;
+const lbToggle = document.getElementById('lb-toggle')!;
+const lbToggleText = document.getElementById('lb-toggle-text')!;
+const lbBody = document.getElementById('lb-body')!;
+let lbExpanded = false;
+
+lbToggle.addEventListener('click', () => {
+  lbExpanded = !lbExpanded;
+  lbBody.classList.toggle('hidden', !lbExpanded);
+  updateLeaderboard();
+});
+
+function renderLbRow(e: LeaderboardEntry, rank: number): HTMLElement {
+  const row = document.createElement('div');
+  row.className = 'lb-row' + (e.you ? ' you' : '') + (e.alive ? '' : ' dead');
+
+  const rankEl = document.createElement('span');
+  rankEl.className = 'lb-rank';
+  rankEl.textContent = String(rank);
+
+  const dot = document.createElement('span');
+  dot.className = 'lb-dot';
+  dot.style.background = e.color;
+
+  const name = document.createElement('span');
+  name.className = 'lb-name';
+  name.textContent = e.name + (e.you ? ' (you)' : '') + (e.alive ? '' : ' ☠');
+
+  const kills = document.createElement('span');
+  kills.className = 'lb-kills';
+  kills.textContent = `${e.kills}⚔`;
+
+  const score = document.createElement('span');
+  score.className = 'lb-score';
+  score.textContent = String(e.score);
+
+  row.append(rankEl, dot, name, kills, score);
+  return row;
+}
+
+function updateLeaderboard() {
+  if (!mp || !mp.inBattle) {
+    leaderboardEl.classList.add('hidden');
+    return;
+  }
+  const entries = mp.getLeaderboard();
+  if (!entries.length) {
+    leaderboardEl.classList.add('hidden');
+    return;
+  }
+  leaderboardEl.classList.remove('hidden');
+
+  const leader = entries[0];
+  lbToggleText.textContent = lbExpanded ? '🏆 Standings ▾' : `🏆 ${leader.name} · ${leader.score} ▸`;
+
+  if (lbExpanded) {
+    lbBody.replaceChildren(...entries.map((e, i) => renderLbRow(e, i + 1)));
+  }
+}
+
+// Refresh a few times a second — cheap, and the standings don't need 60 fps.
+setInterval(updateLeaderboard, 400);

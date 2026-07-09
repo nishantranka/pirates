@@ -49,9 +49,13 @@ battle once 2–11 captains are in. Solo? Hit **Fill with Bots** for an instant
   an island blocks the shot, and when wounded they break off and run for
   cover, favoring fast points of sail and keeping islands between themselves
   and the threat.
+- **Scoring & leaderboard** — you're ranked by a weighted score: **sinking**
+  enemies counts most, **damage dealt** next, and **time survived** least. A
+  collapsible standings panel sits top-right (collapsed to a pill showing the
+  current leader; click to expand the full ranked board). The captain with the
+  highest score when the round ends rules the seas.
 - The round ends when one ship is left afloat — or when **every human captain
-  is dead** (you never spectate bots finishing each other off; the healthiest
-  survivor takes the win).
+  is dead** (you never spectate bots finishing each other off).
 - After a battle the host can call a **rematch** (fresh islands) or send
   everyone **back to the lobby**. If a captain drops mid-fight, their ship
   strikes its colors and sinks.

@@ -50,6 +50,11 @@ const DOUBLE_DURATION = 12; // s of firing both sides at once
 const SPEED_DURATION = 8; // s of double speed
 const SPEED_MULT = 2;
 const SHIELD_HITS = 5; // incoming hits absorbed
+
+// Win score weights: sinking an enemy matters most, damage next, survival least.
+const SCORE_TIME = 0.1; // per second alive
+const SCORE_DAMAGE = 1; // per point of hull damage dealt
+const SCORE_KILL = 10; // per enemy sunk
 const MAX_PICKUPS = 9;
 const PICKUP_R = 15; // px
 const PICKUP_TTL = 20; // s before an uncollected pickup relocates
@@ -155,6 +160,22 @@ interface BuffView {
   mg: boolean;
 }
 
+/** Host-side score accumulators for a ship. */
+interface Score {
+  time: number; // seconds survived
+  damage: number; // hull damage dealt to enemies
+  kills: number; // enemies sunk
+}
+
+export interface LeaderboardEntry {
+  name: string;
+  color: string;
+  score: number;
+  kills: number;
+  alive: boolean;
+  you: boolean;
+}
+
 /** White foam ring where a cannonball hits sand or surf. */
 class Splash {
   x: number;
@@ -255,6 +276,8 @@ export class MpSession {
   private pickupTimers: Record<PickupType, number> = { ...ZERO_TIMERS };
   private buffs: Buff[] = []; // host-authoritative
   private buffView: BuffView[] = []; // render state (host + guest)
+  private scores: Score[] = []; // host-authoritative
+  private scoreView: { score: number; kills: number }[] = []; // host + guest (leaderboard)
   private wind = new Wind();
   private explosions: Explosion[] = [];
   private splashes: Splash[] = [];
@@ -568,6 +591,8 @@ export class MpSession {
       mgSide: 1,
     }));
     this.buffView = this.spawns.map(() => ({ shield: 0, spd: false, dbl: false, mg: false }));
+    this.scores = this.spawns.map(() => ({ time: 0, damage: 0, kills: 0 }));
+    this.scoreView = this.spawns.map(() => ({ score: 0, kills: 0 }));
     this.pickupTimers = { ...ZERO_TIMERS };
     for (const type of PICKUP_ORDER) {
       const [lo, hi] = PICKUP_SPAWN[type];
@@ -623,6 +648,7 @@ export class MpSession {
         while (ship.alive) ship.takeHit();
         this.pendingEvents.push({ e: 'hit', x: ship.x, y: ship.y });
       }
+      if (this.phase === 'battle' && ship.alive) this.scores[i].time += dt; // survival score
     });
 
     if (this.phase === 'battle') this.updatePickups(dt);
@@ -669,7 +695,13 @@ export class MpSession {
             ship.shield--; // a shield charge soaks the hit
             this.pendingEvents.push({ e: 'block', x: ball.x, y: ball.y });
           } else {
+            const before = ship.health;
             ship.takeHit(ball.damage);
+            const owner = this.ships.indexOf(ball.owner);
+            if (owner >= 0) {
+              this.scores[owner].damage += before - ship.health;
+              if (before > 0 && ship.health <= 0) this.scores[owner].kills++; // sinking shot
+            }
             this.pendingEvents.push({ e: 'hit', x: ball.x, y: ball.y });
           }
           break;
@@ -696,12 +728,12 @@ export class MpSession {
       if (this.endTimer >= 0) {
         this.endTimer -= dt;
         if (this.endTimer <= 0) {
-          // Healthiest survivor takes the win (covers multiple bots surviving).
+          // Highest weighted score wins (survival + damage + sinks).
           let winner = -1;
-          let best = 0;
-          this.ships.forEach((s, i) => {
-            if (s.alive && s.health > best) {
-              best = s.health;
+          let best = -Infinity;
+          this.scoreView.forEach((v, i) => {
+            if (v.score > best) {
+              best = v.score;
               winner = i;
             }
           });
@@ -860,7 +892,31 @@ export class MpSession {
         dbl: b.doubleUntil > this.clock,
         mg: b.mgUntil > this.clock,
       };
+      const sc = this.scores[i];
+      this.scoreView[i] = {
+        score: sc.time * SCORE_TIME + sc.damage * SCORE_DAMAGE + sc.kills * SCORE_KILL,
+        kills: sc.kills,
+      };
     }
+  }
+
+  /** True while a battle is running or on its result screen (leaderboard shows). */
+  get inBattle(): boolean {
+    return this.phase === 'battle' || this.phase === 'end';
+  }
+
+  /** Live standings, ranked by weighted score (survival + damage + sinks). */
+  getLeaderboard(): LeaderboardEntry[] {
+    return this.ships
+      .map((s, i) => ({
+        name: this.spawns[i]?.name ?? '',
+        color: this.spawns[i]?.color ?? '#fff',
+        score: Math.round(this.scoreView[i]?.score ?? 0),
+        kills: this.scoreView[i]?.kills ?? 0,
+        alive: s.alive,
+        you: i === this.you,
+      }))
+      .sort((a, b) => b.score - a.score);
   }
 
   private sendSnapshot() {
@@ -876,6 +932,8 @@ export class MpSession {
         spd: this.buffView[i]?.spd ?? false,
         dbl: this.buffView[i]?.dbl ?? false,
         mg: this.buffView[i]?.mg ?? false,
+        score: this.scoreView[i]?.score ?? 0,
+        kills: this.scoreView[i]?.kills ?? 0,
       })),
       balls: this.balls.map((b) => ({ x: b.x, y: b.y, vx: b.vx, vy: b.vy })),
       wind: this.wind.direction,
@@ -920,8 +978,11 @@ export class MpSession {
           spd: false,
           dbl: false,
           mg: false,
+          score: 0,
+          kills: 0,
         }));
         this.buffView = msg.ships.map(() => ({ shield: 0, spd: false, dbl: false, mg: false }));
+        this.scoreView = msg.ships.map(() => ({ score: 0, kills: 0 }));
         this.pickups = [];
         this.balls = [];
         this.ballStates = [];
@@ -993,6 +1054,7 @@ export class MpSession {
       ship.sinkProgress = t.sink;
       ship.shield = t.shield;
       this.buffView[i] = { shield: t.shield, spd: t.spd, dbl: t.dbl, mg: t.mg };
+      this.scoreView[i] = { score: t.score, kills: t.kills };
     });
 
     this.driftWaves(dt);
@@ -1249,40 +1311,8 @@ export class MpSession {
   }
 
   private drawHud() {
-    const ctx = this.ctx;
-    const segW = 14;
-    const segH = 10;
-    const gap = 3;
-    const margin = 16;
-
-    this.ships.forEach((ship, i) => {
-      const spawn = this.spawns[i];
-      if (!spawn) return;
-      const y = margin + i * (segH + 12);
-      const totalW = ship.maxHealth * (segW + gap) - gap;
-      const x0 = ctx.canvas.width - margin - totalW;
-
-      ctx.font = `${i === this.you ? 'bold ' : ''}13px system-ui, sans-serif`;
-      ctx.textAlign = 'right';
-      ctx.textBaseline = 'middle';
-      ctx.fillStyle = i === this.you ? '#ffd75e' : '#fff';
-      const youMark = i === this.you ? ' (you)' : '';
-      ctx.fillText(`${spawn.name}${youMark} · ${spawn.type}`, x0 - 22, y + segH / 2);
-
-      ctx.fillStyle = spawn.color;
-      ctx.fillRect(x0 - 16, y, 10, segH);
-
-      for (let s = 0; s < ship.maxHealth; s++) {
-        ctx.fillStyle = 'rgba(255, 255, 255, 0.25)';
-        ctx.fillRect(x0 + s * (segW + gap), y, segW, segH);
-        const f = Math.max(0, Math.min(1, ship.health - s));
-        if (f > 0) {
-          ctx.fillStyle = '#4caf50';
-          ctx.fillRect(x0 + s * (segW + gap), y, segW * f, segH);
-        }
-      }
-    });
-
+    // Per-ship health lives on the hulls now; standings live in the HTML
+    // leaderboard panel. The canvas HUD only shows the wind compass.
     this.drawWindIndicator();
   }
 

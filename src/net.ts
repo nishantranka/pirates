@@ -49,6 +49,8 @@ export interface ShipState {
   spd: boolean; // speed boost active
   dbl: boolean; // double-broadside active
   mg: boolean; // machine-gun active
+  score: number; // weighted battle score
+  kills: number; // enemies sunk
 }
 
 export interface BallState {

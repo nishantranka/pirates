@@ -17,6 +17,12 @@
   <body>
     <canvas id="game"></canvas>
 
+    <!-- Collapsible live standings (multiplayer). Collapsed to a pill by default. -->
+    <div id="leaderboard" class="hidden">
+      <button id="lb-toggle" type="button"><span id="lb-toggle-text">🏆 Leaderboard</span></button>
+      <div id="lb-body" class="hidden"></div>
+    </div>
+
     <!-- Full-screen selection modal shown before the battle starts -->
     <div id="menu-overlay">
       <div class="modal">
