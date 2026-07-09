@@ -493,8 +493,28 @@ canvas {
 #mpend-title {
   font-size: clamp(24px, 5vw, 44px);
   font-weight: 700;
-  margin-bottom: 28px;
+  margin-bottom: 20px;
   color: #fff;
+}
+
+#mpend-board {
+  margin: 0 auto 26px;
+  width: min(420px, calc(100vw - 48px));
+  max-height: 46svh;
+  overflow-y: auto;
+  background: rgba(10, 30, 55, 0.72);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 12px;
+  padding: 10px 12px;
+}
+
+#mpend-board .lb-row {
+  font-size: 15px;
+  padding: 6px 6px;
+}
+
+#mpend-board:empty {
+  display: none;
 }
 
 #btn-rematch {

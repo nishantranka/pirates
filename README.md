@@ -39,10 +39,12 @@ battle once 2–11 captains are in. Solo? Hit **Fill with Bots** for an instant
 - **Power-ups** — bounties bob in the water (often just off an island's lethal
   shore, so grabbing them is a risk): **❤️ Health** (+1 hp, common),
   **🛡️ Shield** (soak the next 5 hits), **⚡ Speed** (double speed), **↔️ Double**
-  (fire both broadsides at once), and **🔫 Machine-gun** (your next shot opens
-  5 s of rapid continuous fire). Active buffs show as icons and auras on your
-  hull. Everyone spawns on the ring facing outward, so you get a moment to
-  orient before the melee.
+  (fire both broadsides at once), and **Machine-gun** (your next shot opens
+  5 s of rapid continuous fire). Each bounty is labeled so it's clear what it
+  grants, and active buffs show as tags and auras on your hull.
+- **Fair start** — everyone spawns scattered in random directions inside a
+  golden **2-second shield bubble** (fully invulnerable), so you get a moment
+  to orient before anyone can be hit.
 - **Host-authoritative netcode** — the room creator simulates the battle and
   broadcasts 30 Hz snapshots; guests send steering/fire inputs and render with
   smoothing. Rooms are matched through the free public PeerJS broker, then all
@@ -57,8 +59,9 @@ battle once 2–11 captains are in. Solo? Hit **Fill with Bots** for an instant
 - **Scoring & leaderboard** — you're ranked by a weighted score: **sinking**
   enemies counts most, **damage dealt** next, and **time survived** least. A
   collapsible standings panel sits top-right (collapsed to a pill showing the
-  current leader; click to expand the full ranked board). The captain with the
-  highest score when the round ends rules the seas.
+  current leader; click to expand the full ranked board), and the **final
+  standings are shown on the end screen**. The captain with the highest score
+  when the round ends rules the seas.
 - The round ends when one ship is left afloat — or when **every human captain
   is dead** (you never spectate bots finishing each other off).
 - After a battle the host can call a **rematch** (fresh islands) or send

@@ -307,6 +307,7 @@ const btnLeave = document.getElementById('btn-leave')!;
 
 const mpendOverlay = document.getElementById('mpend-overlay')!;
 const mpendTitle = document.getElementById('mpend-title')!;
+const mpendBoard = document.getElementById('mpend-board')!;
 const btnRematch = document.getElementById('btn-rematch')!;
 const btnToLobby = document.getElementById('btn-tolobby')!;
 const btnMpLeave = document.getElementById('btn-mpleave')!;
@@ -446,6 +447,9 @@ function mpCallbacks() {
     },
     onEnd(winnerName: string | null) {
       mpendTitle.textContent = winnerName ? `☠️ ${winnerName} rules the seas!` : 'Mutual destruction — a draw!';
+      // Final standings on the end screen.
+      const board = mp?.getLeaderboard() ?? [];
+      mpendBoard.replaceChildren(...board.map((e, i) => renderLbRow(e, i + 1)));
       const isHost = mp?.isHost ?? false;
       btnRematch.classList.toggle('hidden', !isHost);
       btnToLobby.classList.toggle('hidden', !isHost);
