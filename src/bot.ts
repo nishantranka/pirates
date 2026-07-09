@@ -200,6 +200,28 @@ function evadeHeading(
   return best;
 }
 
+const RAM_SEEK_RANGE = 155; // px; charge a weaker enemy this close
+const RAM_SEEK_BOW = 0.5; // must be roughly ahead of us to be worth charging
+
+/** A weaker enemy that's close and ahead, worth ramming — else null. */
+function pickRamTarget(self: Ship, enemies: Ship[], islands: IslandData[]): Ship | null {
+  let best: Ship | null = null;
+  let bestDist = RAM_SEEK_RANGE;
+  const bigOrBoosted = self.boostFactor > 1 || self.length >= 56;
+  if (!bigOrBoosted) return null; // only ram from a position of strength
+  for (const e of enemies) {
+    const d = Math.hypot(e.x - self.x, e.y - self.y);
+    if (d > bestDist) continue;
+    if (e.health > self.health) continue; // don't ram someone tougher
+    const bearing = Math.atan2(e.y - self.y, e.x - self.x);
+    if (Math.cos(angleDiff(bearing, self.heading)) < RAM_SEEK_BOW) continue; // must be ahead
+    if (segmentHitsIsland(islands, self.x, self.y, e.x, e.y)) continue; // don't charge through sand
+    bestDist = d;
+    best = e;
+  }
+  return best;
+}
+
 export function decideBot(
   self: Ship,
   ships: Ship[],
@@ -231,10 +253,13 @@ export function decideBot(
   const fleeing = wounded && threatDist < FLEE_TRIGGER;
   // When healthy but being raked, break the geometry instead of sitting in it.
   const raker = fleeing ? null : broadsideThreat(self, enemies);
+  // Ram opportunity: a weaker enemy close and ahead — charge the bow through it.
+  const ramTarget = fleeing || raker ? null : pickRamTarget(self, enemies, islands);
 
   let desired: number;
   if (fleeing) desired = fleeHeading(self, threat, islands, wind);
   else if (raker) desired = evadeHeading(self, raker, enemies, islands, wind);
+  else if (ramTarget) desired = Math.atan2(ramTarget.y - self.y, ramTarget.x - self.x);
   else desired = fightHeading(self, target, wind);
 
   const diff = angleDiff(desired, self.heading);

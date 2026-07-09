@@ -31,6 +31,11 @@ battle once 2–11 captains are in. Solo? Hit **Fill with Bots** for an instant
   amber → red) shows who's wounded, and shots fly as bright laser tracers so
   you can read incoming fire. Impact falls off with range — point-blank hits
   hurt far more than long-range grazes.
+- **Ramming** — drive your **bow into an enemy's flank** to spike them: ram
+  damage scales with your speed, how bow-on the hit is, and your hull size, so
+  a boosted or Large ship is a battering ram. Glancing scrapes just shove ships
+  apart; the rammer only takes ~10% back. Bots seek rams when they hold the
+  advantage. (Knockback never pushes a ship onto a lethal island.)
 - **Power-ups** — bounties bob in the water (often just off an island's lethal
   shore, so grabbing them is a risk): **❤️ Health** (+1 hp, common),
   **🛡️ Shield** (soak the next 5 hits), **⚡ Speed** (double speed), **↔️ Double**

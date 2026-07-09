@@ -55,6 +55,16 @@ const SHIELD_HITS = 5; // incoming hits absorbed
 const SCORE_TIME = 0.1; // per second alive
 const SCORE_DAMAGE = 1; // per point of hull damage dealt
 const SCORE_KILL = 10; // per enemy sunk
+
+// Ramming (bow-spike model): damage scales with speed, how bow-on the hit is,
+// and hull size. Driving your bow into an enemy's flank is devastating.
+const RAM_BASE = 1.5;
+const RAM_MAX = 2.6; // damage cap per ram
+const RAM_MIN_BOW = 0.35; // must be driving toward the victim (cos of bow angle)
+const RAM_SPEED_REF = 90; // px/s reference (≈ medium hull)
+const RAM_LEN_REF = 56; // px reference (≈ medium hull)
+const RAM_SELF = 0.1; // rammer takes 10% of the damage it deals
+const RAM_CD = 0.7; // s before the same ship can ram-damage again
 const MAX_PICKUPS = 9;
 const PICKUP_R = 15; // px
 const PICKUP_TTL = 20; // s before an uncollected pickup relocates
@@ -168,6 +178,7 @@ interface Score {
 }
 
 export interface LeaderboardEntry {
+  idx: number; // ship index
   name: string;
   color: string;
   score: number;
@@ -278,6 +289,7 @@ export class MpSession {
   private buffView: BuffView[] = []; // render state (host + guest)
   private scores: Score[] = []; // host-authoritative
   private scoreView: { score: number; kills: number }[] = []; // host + guest (leaderboard)
+  private ramCd: number[] = []; // per-ship ram-damage cooldown (host)
   private wind = new Wind();
   private explosions: Explosion[] = [];
   private splashes: Splash[] = [];
@@ -593,6 +605,7 @@ export class MpSession {
     this.buffView = this.spawns.map(() => ({ shield: 0, spd: false, dbl: false, mg: false }));
     this.scores = this.spawns.map(() => ({ time: 0, damage: 0, kills: 0 }));
     this.scoreView = this.spawns.map(() => ({ score: 0, kills: 0 }));
+    this.ramCd = this.spawns.map(() => 0);
     this.pickupTimers = { ...ZERO_TIMERS };
     for (const type of PICKUP_ORDER) {
       const [lo, hi] = PICKUP_SPAWN[type];
@@ -651,6 +664,7 @@ export class MpSession {
       if (this.phase === 'battle' && ship.alive) this.scores[i].time += dt; // survival score
     });
 
+    if (this.phase === 'battle') this.updateRams(dt);
     if (this.phase === 'battle') this.updatePickups(dt);
 
     if (this.phase === 'battle') {
@@ -686,7 +700,9 @@ export class MpSession {
 
     for (const ball of this.balls) {
       ball.update(dt);
-      if (ball.spent) continue;
+      // After the round is decided, in-flight shots fly on harmlessly — no more
+      // damage or score changes, so the final board matches the declared winner.
+      if (ball.spent || this.phase !== 'battle') continue;
       for (const ship of this.ships) {
         if (ship === ball.owner || !ship.alive) continue;
         if (ship.containsPoint(ball.x, ball.y)) {
@@ -728,15 +744,10 @@ export class MpSession {
       if (this.endTimer >= 0) {
         this.endTimer -= dt;
         if (this.endTimer <= 0) {
-          // Highest weighted score wins (survival + damage + sinks).
-          let winner = -1;
-          let best = -Infinity;
-          this.scoreView.forEach((v, i) => {
-            if (v.score > best) {
-              best = v.score;
-              winner = i;
-            }
-          });
+          // Highest weighted score wins; take it from the same ranked board the
+          // UI shows so the declared winner always matches the top of the list.
+          const board = this.getLeaderboard();
+          const winner = board.length ? board[0].idx : -1;
           this.sendSnapshot(); // final positions, fully sunk hulls
           this.broadcast({ t: 'end', winner });
           this.phase = 'end';
@@ -802,6 +813,86 @@ export class MpSession {
   private fireBoth(shooter: Ship) {
     this.fireSide(shooter, 1, RELOAD);
     this.fireSide(shooter, -1, RELOAD);
+  }
+
+  // ── Ramming (bow-spike) ───────────────────────────────────────────────────
+
+  private updateRams(dt: number) {
+    for (let i = 0; i < this.ramCd.length; i++) this.ramCd[i] = Math.max(0, this.ramCd[i] - dt);
+
+    for (let i = 0; i < this.ships.length; i++) {
+      const A = this.ships[i];
+      if (!A.alive) continue;
+      for (let j = i + 1; j < this.ships.length; j++) {
+        const B = this.ships[j];
+        if (!B.alive) continue;
+
+        const dx = B.x - A.x;
+        const dy = B.y - A.y;
+        const dist = Math.hypot(dx, dy) || 0.001;
+        const contact = A.length * 0.42 + B.length * 0.42;
+        if (dist >= contact) continue;
+
+        // Shove the hulls apart so they don't interpenetrate — but never into an
+        // island (knockback must not become a free grounding kill).
+        const nx = dx / dist;
+        const ny = dy / dist;
+        const push = (contact - dist) * 0.5;
+        const ax = A.x - nx * push;
+        const ay = A.y - ny * push;
+        if (!shipHitsIsland(this.islands, { x: ax, y: ay, width: A.width })) {
+          A.x = ax;
+          A.y = ay;
+        }
+        const bx = B.x + nx * push;
+        const by = B.y + ny * push;
+        if (!shipHitsIsland(this.islands, { x: bx, y: by, width: B.width })) {
+          B.x = bx;
+          B.y = by;
+        }
+
+        if (this.ramCd[i] > 0 || this.ramCd[j] > 0) continue; // just separated recently
+
+        // Each ship deals ram damage by how bow-on and fast it is.
+        const dmgToB = this.ramDamage(A, nx, ny);
+        const dmgToA = this.ramDamage(B, -nx, -ny);
+        let hit = false;
+        if (dmgToB > 0 && this.applyRam(i, j, dmgToB)) hit = true;
+        if (dmgToA > 0 && this.applyRam(j, i, dmgToA)) hit = true;
+        if (hit) {
+          this.pendingEvents.push({ e: 'hit', x: (A.x + B.x) / 2, y: (A.y + B.y) / 2 });
+          this.ramCd[i] = RAM_CD;
+          this.ramCd[j] = RAM_CD;
+        }
+      }
+    }
+  }
+
+  /** Damage `attacker` inflicts by ramming, given the unit vector toward the victim. */
+  private ramDamage(attacker: Ship, nx: number, ny: number): number {
+    const bowOn = Math.cos(attacker.heading) * nx + Math.sin(attacker.heading) * ny;
+    if (bowOn < RAM_MIN_BOW) return 0; // a glancing scrape does nothing
+    const speed = attacker.speed * attacker.boostFactor;
+    const dmg =
+      RAM_BASE * bowOn * (speed / RAM_SPEED_REF) * (attacker.length / RAM_LEN_REF);
+    return Math.min(RAM_MAX, dmg);
+  }
+
+  /** Apply a ram from ship `ai` to `vi`; returns true if damage landed. */
+  private applyRam(ai: number, vi: number, dmg: number): boolean {
+    const attacker = this.ships[ai];
+    const victim = this.ships[vi];
+    if (victim.shield > 0) {
+      victim.shield--; // a shield charge soaks the ram
+      return false;
+    }
+    const before = victim.health;
+    victim.takeHit(dmg);
+    this.scores[ai].damage += before - victim.health;
+    if (before > 0 && victim.health <= 0) this.scores[ai].kills++;
+    // The rammer takes a small share back (unless shielded).
+    if (attacker.shield <= 0) attacker.takeHit(dmg * RAM_SELF);
+    return true;
   }
 
   // ── Power-ups (host) ────────────────────────────────────────────────────────
@@ -909,6 +1000,7 @@ export class MpSession {
   getLeaderboard(): LeaderboardEntry[] {
     return this.ships
       .map((s, i) => ({
+        idx: i,
         name: this.spawns[i]?.name ?? '',
         color: this.spawns[i]?.color ?? '#fff',
         score: Math.round(this.scoreView[i]?.score ?? 0),
