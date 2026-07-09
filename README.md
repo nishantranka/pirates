@@ -5,17 +5,19 @@ A top-down naval combat game for the browser, inspired by the ship battles in
 Built with HTML5 Canvas and TypeScript — no game framework, no backend, the
 whole game runs in the front end.
 
-**This fork adds online multiplayer**: up to 4 players battle in a shared
-free-for-all arena dotted with islands to hide behind. No server of your own
-needed — peers connect directly over WebRTC ([PeerJS](https://peerjs.com/)),
-so it still deploys as plain static files.
+**This fork adds online multiplayer**: up to 11 captains — you plus any mix of
+friends and AI bots — battle in a shared free-for-all arena dotted with islands
+to hide behind. No server of your own needed — peers connect directly over
+WebRTC ([PeerJS](https://peerjs.com/)), so it still deploys as plain static
+files.
 
 ## Multiplayer
 
 Pick **Multiplayer** on the menu, enter a captain name, and either **Create
 Room** (you get a 5-letter room code) or **Join** with a friend's code. In the
 lobby every captain chooses their own boat and readies up; the host starts the
-battle once 2–4 players are in.
+battle once 2–11 captains are in. Solo? Hit **Fill with Bots** for an instant
+10-bot brawl.
 
 - **Free-for-all** — last ship afloat rules the seas. Sink or be sunk.
 - **Islands & shallows** — Minecraft-style blocky islands: a ring of
@@ -23,13 +25,18 @@ battle once 2–4 players are in.
   **running aground is fatal**. Cannonballs splash harmlessly into the sand,
   so islands double as cover.
 - **Shared world** — everyone plays in the same fixed 1600×1000 arena,
-  letterboxed to fit each screen. Wind affects all captains equally.
+  letterboxed to fit each screen, spawning on a ring facing the center. Wind
+  affects all captains equally.
+- **At-a-glance targeting** — a floating health bar over every hull (green →
+  amber → red) shows who's wounded, and cannonballs fly as bright tracers so
+  you can read incoming fire.
 - **Host-authoritative netcode** — the room creator simulates the battle and
   broadcasts 30 Hz snapshots; guests send steering/fire inputs and render with
   smoothing. Rooms are matched through the free public PeerJS broker, then all
   game traffic flows peer-to-peer.
 - **Bots** — no friends online? The host can fill empty slots with AI captains
-  (**Add Bot 🤖** in the lobby, up to 3). Bots hunt the most promising target
+  (**Add Bot 🤖** one at a time, or **Fill with Bots** for a full 10-bot
+  lobby). Bots hunt the most promising target
   (close and already damaged), lead their shots with the wind, hold fire when
   an island blocks the shot, and when wounded they break off and run for
   cover, favoring fast points of sail and keeping islands between themselves

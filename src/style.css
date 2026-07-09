@@ -360,12 +360,14 @@ canvas {
   cursor: not-allowed;
 }
 
-#btn-addbot {
+#btn-addbot,
+#btn-fillbots {
   background: #3b5b8c;
   color: #fff;
 }
 
-#btn-addbot:disabled {
+#btn-addbot:disabled,
+#btn-fillbots:disabled {
   opacity: 0.4;
   cursor: not-allowed;
 }

@@ -1,6 +1,6 @@
 import { Game, DIFFICULTIES, type DifficultyName } from './game';
 import { Input } from './input';
-import { MpSession } from './multiplayer';
+import { MpSession, MAX_PLAYERS, PLAYER_COLORS } from './multiplayer';
 import { CODE_LENGTH, type LobbyPlayerInfo } from './net';
 import { SHIP_TYPES, type ShipTypeName } from './ship';
 import './style.css';
@@ -97,7 +97,7 @@ const setSailBtn = document.getElementById('set-sail')!;
 const modeOptions: Array<{ key: GameMode; label: string; stat: string }> = [
   { key: 'normal', label: 'Normal', stat: 'one battle · win or lose' },
   { key: 'survivor', label: 'Survivor', stat: 'fight until you sink' },
-  { key: 'multiplayer', label: 'Multiplayer', stat: 'up to 4 players · online' },
+  { key: 'multiplayer', label: 'Multiplayer', stat: 'free-for-all · bots or online' },
 ];
 
 modeOptions.forEach(({ key, label, stat }) => {
@@ -300,6 +300,7 @@ const lobbyPlayersEl = document.getElementById('lobby-players')!;
 const lobbyShipRow = document.getElementById('lobby-ship-cards')!;
 const btnReady = document.getElementById('btn-ready') as HTMLButtonElement;
 const btnAddBot = document.getElementById('btn-addbot') as HTMLButtonElement;
+const btnFillBots = document.getElementById('btn-fillbots') as HTMLButtonElement;
 const btnStart = document.getElementById('btn-start') as HTMLButtonElement;
 const btnLeave = document.getElementById('btn-leave')!;
 
@@ -309,8 +310,6 @@ const btnRematch = document.getElementById('btn-rematch')!;
 const btnToLobby = document.getElementById('btn-tolobby')!;
 const btnMpLeave = document.getElementById('btn-mpleave')!;
 const mpendWait = document.getElementById('mpend-wait')!;
-
-const MP_COLORS = ['#8b5a2b', '#7a1f1f', '#2e5d34', '#4a3d7a'];
 
 let mp: MpSession | null = null;
 let myReady = false;
@@ -340,7 +339,7 @@ function renderLobby(players: LobbyPlayerInfo[], you: number, canStart: boolean)
 
     const dot = document.createElement('span');
     dot.className = 'dot';
-    dot.style.background = MP_COLORS[i];
+    dot.style.background = PLAYER_COLORS[i];
 
     const name = document.createElement('span');
     name.className = 'pname';
@@ -384,7 +383,9 @@ function renderLobby(players: LobbyPlayerInfo[], you: number, canStart: boolean)
   btnStart.classList.toggle('hidden', !isHost);
   btnStart.disabled = !canStart;
   btnAddBot.classList.toggle('hidden', !isHost);
-  btnAddBot.disabled = players.length >= 4;
+  btnAddBot.disabled = players.length >= MAX_PLAYERS;
+  btnFillBots.classList.toggle('hidden', !isHost);
+  btnFillBots.disabled = players.length >= MAX_PLAYERS;
 
   const lobbyStatus = document.getElementById('lobby-status')!;
   if (players.length < 2) {
@@ -487,6 +488,7 @@ btnReady.addEventListener('click', () => {
 });
 
 btnAddBot.addEventListener('click', () => mp?.addBot());
+btnFillBots.addEventListener('click', () => mp?.fillBots());
 btnStart.addEventListener('click', () => mp?.startBattle());
 btnLeave.addEventListener('click', () => endMpSession());
 btnRematch.addEventListener('click', () => mp?.rematch());

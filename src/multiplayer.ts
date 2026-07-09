@@ -9,7 +9,7 @@
 
 import { angleDiff } from './ai';
 import { decideBot } from './bot';
-import { Cannonball } from './cannonball';
+import { Cannonball, drawCannonball } from './cannonball';
 import { Explosion } from './explosion';
 import type { Input } from './input';
 import {
@@ -38,7 +38,7 @@ import type { DataConnection } from 'peerjs';
 export const WORLD_W = 1600;
 export const WORLD_H = 1000;
 
-const MAX_PLAYERS = 4;
+export const MAX_PLAYERS = 11; // one human host + up to 10 bots (or more humans)
 const MAX_DT = 0.05;
 const RELOAD = 1.4; // s between broadsides, same for everyone
 const SNAPSHOT_INTERVAL = 1 / 30;
@@ -48,17 +48,44 @@ const WAVE_DRIFT = 14;
 const SMOOTH_RATE = 14; // guest position smoothing (higher = snappier)
 const SNAP_DIST = 250; // beyond this a target jump is a wrap/teleport — snap, don't glide
 
-const PLAYER_COLORS = ['#8b5a2b', '#7a1f1f', '#2e5d34', '#4a3d7a'];
+export const PLAYER_COLORS = [
+  '#8b5a2b', // brown
+  '#7a1f1f', // red
+  '#2e5d34', // green
+  '#4a3d7a', // purple
+  '#b8860b', // goldenrod
+  '#1f6f7a', // teal
+  '#a34a7a', // magenta
+  '#5a6b1f', // olive
+  '#9c4a1f', // sienna
+  '#37507a', // steel blue
+  '#7a1f5a', // plum
+];
 
-const BOT_NAMES = ['Iron Bess', 'Mad Morgan', 'Salty Pete', 'One-Eye Jack'];
+const BOT_NAMES = [
+  'Iron Bess',
+  'Mad Morgan',
+  'Salty Pete',
+  'One-Eye Jack',
+  'Blackfin Sal',
+  'Cutlass Kate',
+  'Barnacle Bill',
+  'Gunner Gwen',
+  'Rusty Rourke',
+  'Scurvy Sam',
+  'Tessa Tide',
+];
 const SHIP_NAMES = Object.keys(SHIP_TYPES) as ShipTypeName[];
 
-const SPAWNS: Array<{ x: number; y: number }> = [
-  { x: WORLD_W * 0.14, y: WORLD_H * 0.16 },
-  { x: WORLD_W * 0.86, y: WORLD_H * 0.84 },
-  { x: WORLD_W * 0.86, y: WORLD_H * 0.16 },
-  { x: WORLD_W * 0.14, y: WORLD_H * 0.84 },
-];
+// Spawn points evenly spaced on a ring so a crowded free-for-all starts fair,
+// every ship facing the melee at the center.
+const SPAWNS: Array<{ x: number; y: number }> = Array.from({ length: MAX_PLAYERS }, (_, i) => {
+  const a = -Math.PI / 2 + (i / MAX_PLAYERS) * Math.PI * 2;
+  return {
+    x: WORLD_W / 2 + Math.cos(a) * WORLD_W * 0.4,
+    y: WORLD_H / 2 + Math.sin(a) * WORLD_H * 0.4,
+  };
+});
 
 interface Wave {
   x: number;
@@ -253,12 +280,11 @@ export class MpSession {
     }
   }
 
-  /** Host only: fill an empty slot with an AI captain (always ready). */
-  addBot() {
-    if (!this.isHost || this.phase !== 'lobby' || this.players.length >= MAX_PLAYERS) return;
+  private makeBot(): HostPlayer | null {
+    if (this.players.length >= MAX_PLAYERS) return null;
     const used = new Set(this.players.map((p) => p.name));
-    const name = BOT_NAMES.find((n) => !used.has(n)) ?? 'Bot';
-    this.players.push({
+    const name = BOT_NAMES.find((n) => !used.has(n)) ?? `Bot ${this.players.length}`;
+    return {
       conn: null,
       name,
       ship: SHIP_NAMES[Math.floor(Math.random() * SHIP_NAMES.length)],
@@ -267,7 +293,22 @@ export class MpSession {
       bot: true,
       turn: 0,
       fire: false,
-    });
+    };
+  }
+
+  /** Host only: fill one empty slot with an AI captain (always ready). */
+  addBot() {
+    if (!this.isHost || this.phase !== 'lobby') return;
+    const bot = this.makeBot();
+    if (!bot) return;
+    this.players.push(bot);
+    this.pushLobby();
+  }
+
+  /** Host only: fill every empty slot with AI captains. */
+  fillBots() {
+    if (!this.isHost || this.phase !== 'lobby') return;
+    for (let bot = this.makeBot(); bot; bot = this.makeBot()) this.players.push(bot);
     this.pushLobby();
   }
 
@@ -315,7 +356,7 @@ export class MpSession {
   private acceptConnection(conn: DataConnection) {
     if (this.phase !== 'lobby' || this.players.length >= MAX_PLAYERS) {
       const reason =
-        this.phase === 'lobby' ? 'Room is full (4 players max).' : 'A battle is already underway.';
+        this.phase === 'lobby' ? 'Room is full.' : 'A battle is already underway.';
       conn.on('open', () => {
         conn.send({ t: 'reject', reason } satisfies H2CMsg);
         setTimeout(() => conn.close(), 200);
@@ -334,7 +375,7 @@ export class MpSession {
     if (msg.t === 'hello') {
       if (idx !== -1) return; // already joined
       if (this.phase !== 'lobby' || this.players.length >= MAX_PLAYERS) {
-        conn.send({ t: 'reject', reason: 'Room is full (4 players max).' } satisfies H2CMsg);
+        conn.send({ t: 'reject', reason: 'Room is full.' } satisfies H2CMsg);
         setTimeout(() => conn.close(), 200);
         return;
       }
@@ -802,20 +843,17 @@ export class MpSession {
     } else {
       // Extrapolate a touch past the last snapshot so 30 Hz balls fly smoothly.
       const age = Math.min((performance.now() - this.lastSnapAt) / 1000, 0.12);
-      ctx.fillStyle = '#1b1b1b';
-      ctx.strokeStyle = 'rgba(255, 255, 255, 0.35)';
-      ctx.lineWidth = 1;
       for (const b of this.ballStates) {
-        ctx.beginPath();
-        ctx.arc(b.x + b.vx * age, b.y + b.vy * age, 3, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.stroke();
+        drawCannonball(ctx, b.x + b.vx * age, b.y + b.vy * age, b.vx, b.vy);
       }
     }
 
     this.ships.forEach((ship, i) => {
       ship.draw(ctx);
-      if (ship.sinkProgress < 1) this.drawNameTag(ship, this.spawns[i]?.name ?? '', i === this.you);
+      if (ship.sinkProgress < 1) {
+        this.drawShipHealth(ship);
+        this.drawNameTag(ship, this.spawns[i]?.name ?? '', i === this.you);
+      }
     });
 
     for (const ex of this.explosions) ex.draw(ctx);
@@ -829,6 +867,31 @@ export class MpSession {
     ctx.strokeRect(ox, oy, WORLD_W * scale, WORLD_H * scale);
 
     this.drawHud();
+  }
+
+  /** A segmented health bar floating just above the hull, colored by how
+   *  hurt the ship is — so you can pick off the weakest target at a glance. */
+  private drawShipHealth(ship: Ship) {
+    const ctx = this.ctx;
+    const n = ship.maxHealth;
+    const segW = 6;
+    const segH = 4;
+    const gap = 1.5;
+    const totalW = n * (segW + gap) - gap;
+    const x0 = ship.x - totalW / 2;
+    const y = ship.y - ship.length * 0.62;
+    const frac = ship.health / ship.maxHealth;
+    const col = frac > 0.5 ? '#5bd15f' : frac > 0.25 ? '#e6b422' : '#e8503a';
+
+    ctx.save();
+    ctx.globalAlpha = 1 - ship.sinkProgress;
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.55)';
+    ctx.fillRect(x0 - 1.5, y - 1.5, totalW + 3, segH + 3);
+    for (let i = 0; i < n; i++) {
+      ctx.fillStyle = i < ship.health ? col : 'rgba(255, 255, 255, 0.22)';
+      ctx.fillRect(x0 + i * (segW + gap), y, segW, segH);
+    }
+    ctx.restore();
   }
 
   private drawNameTag(ship: Ship, name: string, isYou: boolean) {
