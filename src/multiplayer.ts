@@ -28,6 +28,7 @@ import {
   type H2CMsg,
   type LobbyPlayerInfo,
   type PeerHandle,
+  type PickupType,
   type ShipSpawn,
   type ShipState,
 } from './net';
@@ -41,6 +42,42 @@ export const WORLD_H = 1000;
 export const MAX_PLAYERS = 11; // one human host + up to 10 bots (or more humans)
 const MAX_DT = 0.05;
 const RELOAD = 1.4; // s between broadsides, same for everyone
+
+// ── Power-ups ─────────────────────────────────────────────────────────────────
+const MG_RELOAD = 0.16; // machine-gun cadence
+const MG_DURATION = 5; // s of continuous fire
+const DOUBLE_DURATION = 12; // s of firing both sides at once
+const SPEED_DURATION = 8; // s of double speed
+const SPEED_MULT = 2;
+const SHIELD_HITS = 5; // incoming hits absorbed
+const MAX_PICKUPS = 9;
+const PICKUP_R = 15; // px
+const PICKUP_TTL = 20; // s before an uncollected pickup relocates
+
+// Spawn cadence per type (min, max seconds). Health is common; the rest rarer.
+const PICKUP_SPAWN: Record<PickupType, [number, number]> = {
+  health: [6, 10],
+  shield: [15, 24],
+  speed: [13, 21],
+  double: [17, 27],
+  machinegun: [22, 34],
+};
+const PICKUP_ORDER = Object.keys(PICKUP_SPAWN) as PickupType[];
+
+const PICKUP_META: Record<PickupType, { icon: string; color: string }> = {
+  health: { icon: '❤️', color: '#e8503a' },
+  shield: { icon: '🛡️', color: '#3aa0e8' },
+  speed: { icon: '⚡', color: '#e8c53a' },
+  double: { icon: '↔️', color: '#7bd15f' },
+  machinegun: { icon: '🔫', color: '#e8892a' },
+};
+const ZERO_TIMERS: Record<PickupType, number> = {
+  health: 0,
+  shield: 0,
+  speed: 0,
+  double: 0,
+  machinegun: 0,
+};
 const SNAPSHOT_INTERVAL = 1 / 30;
 const INPUT_INTERVAL = 0.05; // guest input heartbeat
 const END_DELAY = 1.7; // let the sinking animation play before declaring a winner
@@ -91,6 +128,31 @@ interface Wave {
   x: number;
   y: number;
   r: number;
+}
+
+interface Pickup {
+  id: number;
+  type: PickupType;
+  x: number;
+  y: number;
+  ttl: number;
+}
+
+/** Host-side timers for a ship's active power-ups (in battle-clock seconds). */
+interface Buff {
+  doubleUntil: number;
+  speedUntil: number;
+  mgUntil: number;
+  mgArmed: boolean; // machine gun picked up, waiting for the next trigger shot
+  mgSide: 1 | -1;
+}
+
+/** What guests need to render a ship's power-up state. */
+interface BuffView {
+  shield: number;
+  spd: boolean;
+  dbl: boolean;
+  mg: boolean;
 }
 
 /** White foam ring where a cannonball hits sand or surf. */
@@ -187,6 +249,12 @@ export class MpSession {
   private islands: IslandData[] = [];
   private spawns: ShipSpawn[] = [];
   private ships: Ship[] = [];
+  private clock = 0; // seconds since the round began (drives buff timers)
+  private pickups: Pickup[] = [];
+  private pickupId = 0;
+  private pickupTimers: Record<PickupType, number> = { ...ZERO_TIMERS };
+  private buffs: Buff[] = []; // host-authoritative
+  private buffView: BuffView[] = []; // render state (host + guest)
   private wind = new Wind();
   private explosions: Explosion[] = [];
   private splashes: Splash[] = [];
@@ -473,7 +541,9 @@ export class MpSession {
         color: PLAYER_COLORS[i],
         x: s.x,
         y: s.y,
-        heading: Math.atan2(WORLD_H / 2 - s.y, WORLD_W / 2 - s.x),
+        // Face outward (away from the ring center) so ships start sailing apart
+        // and everyone gets a moment to orient before the melee.
+        heading: Math.atan2(s.y - WORLD_H / 2, s.x - WORLD_W / 2),
       };
     });
     this.islands = generateIslands(WORLD_W, WORLD_H, SPAWNS.slice(0, this.players.length));
@@ -486,6 +556,24 @@ export class MpSession {
     this.endTimer = -1;
     this.snapshotAcc = 0;
     this.you = 0;
+
+    // Reset power-up state for the round.
+    this.clock = 0;
+    this.pickups = [];
+    this.buffs = this.spawns.map(() => ({
+      doubleUntil: 0,
+      speedUntil: 0,
+      mgUntil: 0,
+      mgArmed: false,
+      mgSide: 1,
+    }));
+    this.buffView = this.spawns.map(() => ({ shield: 0, spd: false, dbl: false, mg: false }));
+    this.pickupTimers = { ...ZERO_TIMERS };
+    for (const type of PICKUP_ORDER) {
+      const [lo, hi] = PICKUP_SPAWN[type];
+      // Stagger initial spawns; health arrives soonest.
+      this.pickupTimers[type] = lo * 0.5 + Math.random() * (hi - lo);
+    }
     for (const p of this.players) {
       p.turn = 0;
       p.fire = false;
@@ -503,6 +591,7 @@ export class MpSession {
   }
 
   private hostUpdate(dt: number) {
+    this.clock += dt;
     this.wind.update(dt);
     this.driftWaves(dt);
 
@@ -525,6 +614,8 @@ export class MpSession {
     }
 
     this.ships.forEach((ship, i) => {
+      ship.boostFactor =
+        this.phase === 'battle' && this.buffs[i].speedUntil > this.clock ? SPEED_MULT : 1;
       const turn: Turn = this.phase === 'battle' && this.players[i].connected ? this.players[i].turn : 0;
       ship.update(dt, turn, WORLD_W, WORLD_H, this.wind.speedFactor(ship.heading));
       // Running aground is fatal — islands are obstacles, not bumpers.
@@ -534,12 +625,36 @@ export class MpSession {
       }
     });
 
+    if (this.phase === 'battle') this.updatePickups(dt);
+
     if (this.phase === 'battle') {
       this.ships.forEach((ship, i) => {
-        if (ship.alive && this.players[i].connected && this.players[i].fire && ship.reload <= 0) {
-          this.fireBroadside(ship);
-          this.pendingEvents.push({ e: 'fire' });
+        if (!ship.alive || !this.players[i].connected) return;
+        const b = this.buffs[i];
+
+        // Machine gun: rapid continuous fire on one side for its duration.
+        if (b.mgUntil > this.clock) {
+          if (ship.reload <= 0) {
+            this.fireSide(ship, b.mgSide, MG_RELOAD);
+            this.pendingEvents.push({ e: 'fire' });
+          }
+          return;
         }
+
+        if (!this.players[i].fire || ship.reload > 0) return;
+
+        if (b.mgArmed) {
+          // The trigger shot arms 5 s of machine-gun fire on the nearest side.
+          b.mgArmed = false;
+          b.mgSide = this.chooseSide(ship);
+          b.mgUntil = this.clock + MG_DURATION;
+          this.fireSide(ship, b.mgSide, MG_RELOAD);
+        } else if (b.doubleUntil > this.clock) {
+          this.fireBoth(ship);
+        } else {
+          this.fireBroadside(ship);
+        }
+        this.pendingEvents.push({ e: 'fire' });
       });
     }
 
@@ -550,8 +665,13 @@ export class MpSession {
         if (ship === ball.owner || !ship.alive) continue;
         if (ship.containsPoint(ball.x, ball.y)) {
           ball.spent = true;
-          ship.takeHit(ball.damage);
-          this.pendingEvents.push({ e: 'hit', x: ball.x, y: ball.y });
+          if (ship.shield > 0) {
+            ship.shield--; // a shield charge soaks the hit
+            this.pendingEvents.push({ e: 'block', x: ball.x, y: ball.y });
+          } else {
+            ship.takeHit(ball.damage);
+            this.pendingEvents.push({ e: 'hit', x: ball.x, y: ball.y });
+          }
           break;
         }
       }
@@ -561,6 +681,8 @@ export class MpSession {
       }
     }
     this.balls = this.balls.filter((b) => !b.spent);
+
+    this.updateBuffView();
 
     // Apply this tick's events locally (sounds + effects), then queue for guests.
     if (this.pendingEvents.length > 0) this.applyEvents(this.pendingEvents);
@@ -602,9 +724,9 @@ export class MpSession {
     this.tickEffects(dt);
   }
 
-  private fireBroadside(shooter: Ship) {
-    // Aim the broadside at the nearest living enemy; default starboard if alone.
-    let side = 1;
+  /** Nearest living enemy's side (which way to point the broadside). */
+  private chooseSide(shooter: Ship): 1 | -1 {
+    let side: 1 | -1 = 1;
     let best = Infinity;
     for (const other of this.ships) {
       if (other === shooter || !other.alive) continue;
@@ -615,8 +737,12 @@ export class MpSession {
         side = Math.sin(bearing - shooter.heading) >= 0 ? 1 : -1;
       }
     }
-    const dir = shooter.heading + (side * Math.PI) / 2;
+    return side;
+  }
 
+  /** Fire one broadside off the given side, setting the reload timer. */
+  private fireSide(shooter: Ship, side: 1 | -1, reload: number) {
+    const dir = shooter.heading + (side * Math.PI) / 2;
     const fx = Math.cos(shooter.heading);
     const fy = Math.sin(shooter.heading);
     const sx = Math.cos(dir);
@@ -633,22 +759,128 @@ export class MpSession {
         ),
       );
     }
-    shooter.reload = RELOAD;
+    shooter.reload = reload;
+  }
+
+  private fireBroadside(shooter: Ship) {
+    this.fireSide(shooter, this.chooseSide(shooter), RELOAD);
+  }
+
+  /** Double-broadside power-up: fire both sides at once. */
+  private fireBoth(shooter: Ship) {
+    this.fireSide(shooter, 1, RELOAD);
+    this.fireSide(shooter, -1, RELOAD);
+  }
+
+  // ── Power-ups (host) ────────────────────────────────────────────────────────
+
+  private updatePickups(dt: number) {
+    // Expire uncollected pickups so they relocate and the map stays fresh.
+    for (const p of this.pickups) p.ttl -= dt;
+    this.pickups = this.pickups.filter((p) => p.ttl > 0);
+
+    // Timed spawns per type.
+    for (const type of PICKUP_ORDER) {
+      this.pickupTimers[type] -= dt;
+      if (this.pickupTimers[type] > 0) continue;
+      const [lo, hi] = PICKUP_SPAWN[type];
+      this.pickupTimers[type] = lo + Math.random() * (hi - lo);
+      if (this.pickups.length >= MAX_PICKUPS) continue;
+      const spot = this.pickDifficultSpot();
+      if (spot) this.pickups.push({ id: this.pickupId++, type, x: spot.x, y: spot.y, ttl: PICKUP_TTL });
+    }
+
+    // Collection: any living ship overlapping a pickup collects it.
+    for (const p of this.pickups) {
+      for (let i = 0; i < this.ships.length; i++) {
+        const ship = this.ships[i];
+        if (!ship.alive) continue;
+        if (Math.hypot(ship.x - p.x, ship.y - p.y) < PICKUP_R + ship.width * 0.7) {
+          this.applyPickup(i, p.type);
+          this.pendingEvents.push({ e: 'grab', x: p.x, y: p.y, p: p.type });
+          p.ttl = 0;
+          break;
+        }
+      }
+    }
+    this.pickups = this.pickups.filter((p) => p.ttl > 0);
+  }
+
+  /** A tempting-but-dangerous spot: usually just off an island's lethal shore. */
+  private pickDifficultSpot(): { x: number; y: number } | null {
+    for (let attempt = 0; attempt < 24; attempt++) {
+      let x: number, y: number;
+      if (this.islands.length && Math.random() < 0.6) {
+        const isl = this.islands[Math.floor(Math.random() * this.islands.length)];
+        const c = isl.circles[Math.floor(Math.random() * isl.circles.length)];
+        const a = Math.random() * Math.PI * 2;
+        const d = c.r + 28 + Math.random() * 30; // just off the sand: risky but grabbable
+        x = c.x + Math.cos(a) * d;
+        y = c.y + Math.sin(a) * d;
+      } else {
+        x = 120 + Math.random() * (WORLD_W - 240);
+        y = 120 + Math.random() * (WORLD_H - 240);
+      }
+      if (x < 40 || x > WORLD_W - 40 || y < 40 || y > WORLD_H - 40) continue;
+      if (islandHitsPoint(this.islands, x, y)) continue; // not on land
+      if (this.pickups.some((q) => Math.hypot(q.x - x, q.y - y) < 90)) continue; // spread out
+      return { x, y };
+    }
+    return null;
+  }
+
+  private applyPickup(i: number, type: PickupType) {
+    const ship = this.ships[i];
+    const b = this.buffs[i];
+    switch (type) {
+      case 'health':
+        ship.health = Math.min(ship.maxHealth, ship.health + 1);
+        break;
+      case 'shield':
+        ship.shield = SHIELD_HITS;
+        break;
+      case 'speed':
+        b.speedUntil = this.clock + SPEED_DURATION;
+        break;
+      case 'double':
+        b.doubleUntil = this.clock + DOUBLE_DURATION;
+        break;
+      case 'machinegun':
+        b.mgArmed = true;
+        break;
+    }
+  }
+
+  private updateBuffView() {
+    for (let i = 0; i < this.ships.length; i++) {
+      const b = this.buffs[i];
+      this.buffView[i] = {
+        shield: this.ships[i].shield,
+        spd: b.speedUntil > this.clock,
+        dbl: b.doubleUntil > this.clock,
+        mg: b.mgUntil > this.clock,
+      };
+    }
   }
 
   private sendSnapshot() {
     const msg: H2CMsg = {
       t: 'state',
-      ships: this.ships.map((s) => ({
+      ships: this.ships.map((s, i) => ({
         x: s.x,
         y: s.y,
         heading: s.heading,
         health: s.health,
         sink: s.sinkProgress,
+        shield: s.shield,
+        spd: this.buffView[i]?.spd ?? false,
+        dbl: this.buffView[i]?.dbl ?? false,
+        mg: this.buffView[i]?.mg ?? false,
       })),
       balls: this.balls.map((b) => ({ x: b.x, y: b.y, vx: b.vx, vy: b.vy })),
       wind: this.wind.direction,
       events: this.pendingEvents,
+      pickups: this.pickups.map((p) => ({ t: p.type, x: p.x, y: p.y })),
     };
     this.pendingEvents = [];
     this.broadcast(msg);
@@ -684,7 +916,13 @@ export class MpSession {
           heading: sp.heading,
           health: SHIP_TYPES[sp.type].maxHealth,
           sink: 0,
+          shield: 0,
+          spd: false,
+          dbl: false,
+          mg: false,
         }));
+        this.buffView = msg.ships.map(() => ({ shield: 0, spd: false, dbl: false, mg: false }));
+        this.pickups = [];
         this.balls = [];
         this.ballStates = [];
         this.explosions = [];
@@ -699,6 +937,7 @@ export class MpSession {
       case 'state':
         this.targets = msg.ships;
         this.ballStates = msg.balls;
+        this.pickups = msg.pickups.map((p) => ({ id: 0, type: p.t, x: p.x, y: p.y, ttl: 1 }));
         this.lastSnapAt = performance.now();
         this.wind.direction = msg.wind;
         this.applyEvents(msg.events);
@@ -752,6 +991,8 @@ export class MpSession {
       }
       ship.health = t.health;
       ship.sinkProgress = t.sink;
+      ship.shield = t.shield;
+      this.buffView[i] = { shield: t.shield, spd: t.spd, dbl: t.dbl, mg: t.mg };
     });
 
     this.driftWaves(dt);
@@ -850,6 +1091,8 @@ export class MpSession {
 
     for (const island of this.islands) drawIsland(ctx, island);
 
+    this.drawPickups();
+
     if (this.isHost) {
       for (const ball of this.balls) ball.draw(ctx);
     } else {
@@ -861,9 +1104,11 @@ export class MpSession {
     }
 
     this.ships.forEach((ship, i) => {
+      if (ship.sinkProgress < 1) this.drawShipBuffs(ship, i); // aura under the hull
       ship.draw(ctx);
       if (ship.sinkProgress < 1) {
         this.drawShipHealth(ship);
+        this.drawBuffIcons(ship, i);
         this.drawNameTag(ship, this.spawns[i]?.name ?? '', i === this.you);
       }
     });
@@ -879,6 +1124,84 @@ export class MpSession {
     ctx.strokeRect(ox, oy, WORLD_W * scale, WORLD_H * scale);
 
     this.drawHud();
+  }
+
+  private drawPickups() {
+    const ctx = this.ctx;
+    const bob = Math.sin(performance.now() / 300) * 2;
+    for (const p of this.pickups) {
+      const meta = PICKUP_META[p.type];
+      const yy = p.y + bob;
+      ctx.beginPath();
+      ctx.arc(p.x, yy, PICKUP_R + 3, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.3)';
+      ctx.fill();
+      ctx.beginPath();
+      ctx.arc(p.x, yy, PICKUP_R, 0, Math.PI * 2);
+      ctx.fillStyle = meta.color;
+      ctx.fill();
+      ctx.lineWidth = 2;
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.92)';
+      ctx.stroke();
+      ctx.font = '16px system-ui, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(meta.icon, p.x, yy + 1);
+    }
+  }
+
+  /** Auras drawn beneath a ship: shield ring and speed streak. */
+  private drawShipBuffs(ship: Ship, i: number) {
+    const v = this.buffView[i];
+    if (!v) return;
+    const ctx = this.ctx;
+
+    if (v.spd) {
+      ctx.save();
+      ctx.globalAlpha = 0.55;
+      ctx.strokeStyle = '#ffe14d';
+      ctx.lineWidth = 3;
+      ctx.lineCap = 'round';
+      const bx = ship.x - Math.cos(ship.heading) * ship.length * 0.5;
+      const by = ship.y - Math.sin(ship.heading) * ship.length * 0.5;
+      ctx.beginPath();
+      ctx.moveTo(bx, by);
+      ctx.lineTo(bx - Math.cos(ship.heading) * 16, by - Math.sin(ship.heading) * 16);
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    if (v.shield > 0) {
+      ctx.save();
+      ctx.globalAlpha = 0.45 + 0.25 * Math.sin(performance.now() / 150);
+      ctx.strokeStyle = '#6fd3ff';
+      ctx.lineWidth = 2.5;
+      ctx.beginPath();
+      ctx.arc(ship.x, ship.y, ship.length * 0.72, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.restore();
+    }
+  }
+
+  /** Small icon row above the health bar showing which power-ups are active. */
+  private drawBuffIcons(ship: Ship, i: number) {
+    const v = this.buffView[i];
+    if (!v) return;
+    const icons: string[] = [];
+    if (v.dbl) icons.push('↔️');
+    if (v.mg) icons.push('🔫');
+    if (v.spd) icons.push('⚡');
+    if (v.shield > 0) icons.push(`🛡️${v.shield}`);
+    if (!icons.length) return;
+
+    const ctx = this.ctx;
+    ctx.save();
+    ctx.globalAlpha = 1 - ship.sinkProgress;
+    ctx.font = '11px system-ui, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'bottom';
+    ctx.fillText(icons.join(' '), ship.x, ship.y - ship.length * 0.62 - 4);
+    ctx.restore();
   }
 
   /** A segmented health bar floating just above the hull, colored by how

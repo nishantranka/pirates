@@ -31,6 +31,8 @@ export class Ship {
   guns: number;
   reload = 0; // s until cannons are ready again
   sinkProgress = 0; // 0 afloat → 1 fully sunk
+  shield = 0; // remaining shield hits that will be absorbed (multiplayer power-up)
+  boostFactor = 1; // speed multiplier from the speed power-up
 
   readonly type: ShipTypeName;
   readonly length: number;
@@ -71,8 +73,9 @@ export class Ship {
     }
 
     this.heading += turn * this.turnRate * dt;
-    this.x += Math.cos(this.heading) * this.speed * speedFactor * dt;
-    this.y += Math.sin(this.heading) * this.speed * speedFactor * dt;
+    const v = this.speed * speedFactor * this.boostFactor;
+    this.x += Math.cos(this.heading) * v * dt;
+    this.y += Math.sin(this.heading) * v * dt;
 
     // Wrap around world edges, with margin so the ship fully leaves first.
     const m = this.length;

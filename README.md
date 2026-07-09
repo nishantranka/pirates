@@ -28,8 +28,16 @@ battle once 2–11 captains are in. Solo? Hit **Fill with Bots** for an instant
   letterboxed to fit each screen, spawning on a ring facing the center. Wind
   affects all captains equally.
 - **At-a-glance targeting** — a floating health bar over every hull (green →
-  amber → red) shows who's wounded, and cannonballs fly as bright tracers so
-  you can read incoming fire.
+  amber → red) shows who's wounded, and shots fly as bright laser tracers so
+  you can read incoming fire. Impact falls off with range — point-blank hits
+  hurt far more than long-range grazes.
+- **Power-ups** — bounties bob in the water (often just off an island's lethal
+  shore, so grabbing them is a risk): **❤️ Health** (+1 hp, common),
+  **🛡️ Shield** (soak the next 5 hits), **⚡ Speed** (double speed), **↔️ Double**
+  (fire both broadsides at once), and **🔫 Machine-gun** (your next shot opens
+  5 s of rapid continuous fire). Active buffs show as icons and auras on your
+  hull. Everyone spawns on the ring facing outward, so you get a moment to
+  orient before the melee.
 - **Host-authoritative netcode** — the room creator simulates the battle and
   broadcasts 30 Hz snapshots; guests send steering/fire inputs and render with
   smoothing. Rooms are matched through the free public PeerJS broker, then all

@@ -31,12 +31,24 @@ export interface ShipSpawn {
   heading: number;
 }
 
+export type PickupType = 'health' | 'shield' | 'speed' | 'double' | 'machinegun';
+
+export interface PickupState {
+  t: PickupType;
+  x: number;
+  y: number;
+}
+
 export interface ShipState {
   x: number;
   y: number;
   heading: number;
   health: number;
   sink: number;
+  shield: number; // remaining shield hits
+  spd: boolean; // speed boost active
+  dbl: boolean; // double-broadside active
+  mg: boolean; // machine-gun active
 }
 
 export interface BallState {
@@ -49,7 +61,9 @@ export interface BallState {
 export type GameEvent =
   | { e: 'fire' }
   | { e: 'hit'; x: number; y: number }
-  | { e: 'splash'; x: number; y: number };
+  | { e: 'splash'; x: number; y: number }
+  | { e: 'grab'; x: number; y: number; p: PickupType }
+  | { e: 'block'; x: number; y: number };
 
 /** Guest → host. */
 export type C2HMsg =
@@ -63,7 +77,14 @@ export type H2CMsg =
   | { t: 'reject'; reason: string }
   | { t: 'lobby'; players: LobbyPlayerInfo[]; you: number }
   | { t: 'start'; islands: IslandData[]; ships: ShipSpawn[]; you: number }
-  | { t: 'state'; ships: ShipState[]; balls: BallState[]; wind: number; events: GameEvent[] }
+  | {
+      t: 'state';
+      ships: ShipState[];
+      balls: BallState[];
+      wind: number;
+      events: GameEvent[];
+      pickups: PickupState[];
+    }
   | { t: 'end'; winner: number }
   | { t: 'toLobby' };
 
