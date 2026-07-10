@@ -45,9 +45,11 @@ battle once 2–11 captains are in. Solo? Hit **Fill with Bots** for an instant
 - **Fair start** — everyone spawns scattered in random directions inside a
   golden **2-second shield bubble** (fully invulnerable), so you get a moment
   to orient before anyone can be hit.
-- **Shrinking storm** — after a short calm the arena starts closing in: a
-  centered safe zone shrinks over time and anyone caught in the red storm takes
-  steady damage, herding the survivors together so rounds can't drag on. As
+- **Maelstrom** — after a short calm a whirlpool forms at the center and ramps
+  up: an inward **current tows every ship toward the middle** (with a swirling
+  drift), and a circular calm **eye shrinks over time** — anyone caught outside
+  it takes steady damage. Because it's radial it works with the wrap-around
+  world: sailing across the screen just gets you towed back to the fight. As
   captains are eliminated, **fewer bounties spawn**, tightening the endgame.
 - **Host-authoritative netcode** — the room creator simulates the battle and
   broadcasts 30 Hz snapshots; guests send steering/fire inputs and render with

@@ -70,12 +70,17 @@ const PICKUP_R = 15; // px
 const PICKUP_TTL = 20; // s before an uncollected pickup relocates
 const SPAWN_PROTECT = 2; // s of spawn invulnerability while ships scatter
 
-// Shrinking storm: a safe zone that closes in over time, forcing captains
-// together so a big free-for-all can't drag on.
-const STORM_START = 18; // s of calm before the storm begins closing
-const STORM_SHRINK_TIME = 60; // s to shrink from full arena to the minimum
-const STORM_MIN_FRAC = 0.3; // safe zone bottoms out at 30% of the arena
-const STORM_DPS = 1.5; // hull damage per second while caught outside the zone
+// Whirlpool (maelstrom): a growing vortex at the arena center that drags every
+// ship inward and shreds anyone caught outside its shrinking eye. Radial, so it
+// works with the wrap-around world (there's no "safe far edge" — the current
+// tows you back to the middle wherever you are).
+const WHIRL_START = 15; // s of calm before the maelstrom forms
+const WHIRL_RAMP = 55; // s to reach full strength
+const EYE_MAX = 720; // eye radius before the whirlpool forms (covers most of the arena)
+const EYE_MIN = 150; // fully-formed eye radius
+const PULL_MAX = 85; // px/s inward current at full strength (outside the eye)
+const SWIRL_FRAC = 0.5; // tangential swirl as a fraction of the inward pull
+const WHIRL_DPS = 1.3; // hull damage/s while outside the eye (scaled by strength)
 
 // Spawn cadence per type (min, max seconds). Health is common; the rest rarer.
 const PICKUP_SPAWN: Record<PickupType, [number, number]> = {
@@ -300,7 +305,7 @@ export class MpSession {
   private scoreView: { score: number; kills: number }[] = []; // host + guest (leaderboard)
   private ramCd: number[] = []; // per-ship ram-damage cooldown (host)
   private spawnUntil: number[] = []; // per-ship spawn-invulnerability expiry (host)
-  private stormFrac = 1; // safe-zone fraction (host computes, guest mirrors)
+  private eyeR = EYE_MAX; // whirlpool eye radius (host computes, guest mirrors)
   private wind = new Wind();
   private explosions: Explosion[] = [];
   private splashes: Splash[] = [];
@@ -618,7 +623,7 @@ export class MpSession {
     this.scoreView = this.spawns.map(() => ({ score: 0, kills: 0 }));
     this.ramCd = this.spawns.map(() => 0);
     this.spawnUntil = this.spawns.map(() => SPAWN_PROTECT); // clock starts at 0
-    this.stormFrac = 1;
+    this.eyeR = EYE_MAX;
     this.pickupTimers = { ...ZERO_TIMERS };
     for (const type of PICKUP_ORDER) {
       const [lo, hi] = PICKUP_SPAWN[type];
@@ -656,9 +661,11 @@ export class MpSession {
             : 0;
       this.players[0].fire = this.input.isDown('Space');
 
+      const eye =
+        this.eyeR < EYE_MAX ? { x: WORLD_W / 2, y: WORLD_H / 2, r: this.eyeR } : undefined;
       this.players.forEach((p, i) => {
         if (!p.bot) return;
-        const d = decideBot(this.ships[i], this.ships, this.islands, this.wind);
+        const d = decideBot(this.ships[i], this.ships, this.islands, this.wind, eye);
         p.turn = d.turn;
         p.fire = d.fire;
       });
@@ -679,7 +686,7 @@ export class MpSession {
     });
 
     if (this.phase === 'battle') this.updateRams(dt);
-    if (this.phase === 'battle') this.updateStorm(dt);
+    if (this.phase === 'battle') this.updateWhirlpool(dt);
     if (this.phase === 'battle') this.updatePickups(dt);
 
     if (this.phase === 'battle') {
@@ -914,32 +921,46 @@ export class MpSession {
     return true;
   }
 
-  // ── Storm (host) ────────────────────────────────────────────────────────────
+  // ── Whirlpool (host) ────────────────────────────────────────────────────────
 
-  /** Centered safe rectangle for the current storm fraction. */
-  private safeRect(frac = this.stormFrac) {
-    const w = WORLD_W * frac;
-    const h = WORLD_H * frac;
-    const x0 = (WORLD_W - w) / 2;
-    const y0 = (WORLD_H - h) / 2;
-    return { x0, y0, x1: x0 + w, y1: y0 + h };
+  /** Maelstrom strength for the current clock: 0 before it forms → 1 at full. */
+  private whirlStrength(): number {
+    if (this.clock < WHIRL_START) return 0;
+    return Math.min((this.clock - WHIRL_START) / WHIRL_RAMP, 1);
   }
 
-  private updateStorm(dt: number) {
-    if (this.clock < STORM_START) {
-      this.stormFrac = 1;
-      return;
-    }
-    const t = Math.min((this.clock - STORM_START) / STORM_SHRINK_TIME, 1);
-    this.stormFrac = 1 - (1 - STORM_MIN_FRAC) * t;
+  private updateWhirlpool(dt: number) {
+    const s = this.whirlStrength();
+    this.eyeR = EYE_MAX - (EYE_MAX - EYE_MIN) * s;
+    if (s <= 0) return;
 
-    const { x0, y0, x1, y1 } = this.safeRect();
-    this.ships.forEach((s, i) => {
-      if (!s.alive || this.spawnUntil[i] > this.clock) return;
-      if (s.x < x0 || s.x > x1 || s.y < y0 || s.y > y1) {
-        const before = s.health;
-        s.takeHit(STORM_DPS * dt); // the storm ignores shields — get to the eye
-        if (before > 0 && s.health <= 0) this.pendingEvents.push({ e: 'hit', x: s.x, y: s.y });
+    const cx = WORLD_W / 2;
+    const cy = WORLD_H / 2;
+    this.ships.forEach((ship, i) => {
+      if (!ship.alive) return;
+      const dx = cx - ship.x;
+      const dy = cy - ship.y;
+      const d = Math.hypot(dx, dy) || 0.001;
+      const nx = dx / d; // unit vector toward the eye
+      const ny = dy / d;
+      const outside = d > this.eyeR;
+
+      // Inward current + tangential swirl — strong outside the eye, gentle within.
+      const pull = PULL_MAX * s * (outside ? 1 : 0.15);
+      const sw = SWIRL_FRAC * pull;
+      const tx = ship.x + (nx * pull - ny * sw) * dt;
+      const ty = ship.y + (ny * pull + nx * sw) * dt;
+      // Don't let the current sweep a ship onto a lethal island.
+      if (!shipHitsIsland(this.islands, { x: tx, y: ty, width: ship.width })) {
+        ship.x = tx;
+        ship.y = ty;
+      }
+
+      // Damage anyone caught outside the eye (spawn-protected ships are exempt).
+      if (outside && this.spawnUntil[i] <= this.clock) {
+        const before = ship.health;
+        ship.takeHit(WHIRL_DPS * s * dt);
+        if (before > 0 && ship.health <= 0) this.pendingEvents.push({ e: 'hit', x: ship.x, y: ship.y });
       }
     });
   }
@@ -1087,7 +1108,7 @@ export class MpSession {
       wind: this.wind.direction,
       events: this.pendingEvents,
       pickups: this.pickups.map((p) => ({ t: p.type, x: p.x, y: p.y })),
-      storm: this.stormFrac,
+      eye: this.eyeR,
     };
     this.pendingEvents = [];
     this.broadcast(msg);
@@ -1133,7 +1154,7 @@ export class MpSession {
         }));
         this.buffView = msg.ships.map(() => ({ shield: 0, spd: false, dbl: false, mg: false, inv: true }));
         this.scoreView = msg.ships.map(() => ({ score: 0, kills: 0 }));
-        this.stormFrac = 1;
+        this.eyeR = EYE_MAX;
         this.pickups = [];
         this.balls = [];
         this.ballStates = [];
@@ -1150,7 +1171,7 @@ export class MpSession {
         this.targets = msg.ships;
         this.ballStates = msg.balls;
         this.pickups = msg.pickups.map((p) => ({ id: 0, type: p.t, x: p.x, y: p.y, ttl: 1 }));
-        this.stormFrac = msg.storm;
+        this.eyeR = msg.eye;
         this.lastSnapAt = performance.now();
         this.wind.direction = msg.wind;
         this.applyEvents(msg.events);
@@ -1330,7 +1351,7 @@ export class MpSession {
     for (const ex of this.explosions) ex.draw(ctx);
     for (const sp of this.splashes) sp.draw(ctx);
 
-    this.drawStorm();
+    this.drawWhirlpool();
 
     ctx.restore();
 
@@ -1342,23 +1363,42 @@ export class MpSession {
     this.drawHud();
   }
 
-  /** The encroaching storm: a red danger wash outside the safe zone. */
-  private drawStorm() {
-    if (this.stormFrac >= 1) return;
+  /** The maelstrom: a swirling danger wash outside the calm circular eye. */
+  private drawWhirlpool() {
+    if (this.eyeR >= EYE_MAX) return;
     const ctx = this.ctx;
-    const { x0, y0, x1, y1 } = this.safeRect();
-    const pulse = 0.24 + 0.07 * Math.sin(performance.now() / 400);
+    const cx = WORLD_W / 2;
+    const cy = WORLD_H / 2;
+    const now = performance.now();
 
     ctx.save();
-    ctx.fillStyle = `rgba(150, 22, 66, ${pulse})`;
-    ctx.fillRect(0, 0, WORLD_W, y0); // top
-    ctx.fillRect(0, y1, WORLD_W, WORLD_H - y1); // bottom
-    ctx.fillRect(0, y0, x0, y1 - y0); // left
-    ctx.fillRect(x1, y0, WORLD_W - x1, y1 - y0); // right
 
-    ctx.strokeStyle = 'rgba(255, 95, 125, 0.95)';
+    // Danger tint everywhere outside the eye (rect with a reversed-arc hole).
+    const pulse = 0.2 + 0.06 * Math.sin(now / 500);
+    ctx.fillStyle = `rgba(26, 78, 92, ${pulse})`;
+    ctx.beginPath();
+    ctx.rect(0, 0, WORLD_W, WORLD_H);
+    ctx.arc(cx, cy, this.eyeR, 0, Math.PI * 2, true);
+    ctx.fill();
+
+    // Swirling current arcs to sell the pull.
+    const rot = now / 1400;
+    ctx.strokeStyle = 'rgba(190, 235, 235, 0.22)';
+    ctx.lineWidth = 2;
+    for (let ring = 0; ring < 4; ring++) {
+      const r = this.eyeR + 32 + ring * 78;
+      ctx.beginPath();
+      ctx.arc(cx, cy, r, rot + ring * 1.3, rot + ring * 1.3 + Math.PI * 1.3);
+      ctx.stroke();
+    }
+
+    // Bright eye boundary.
+    ctx.strokeStyle = 'rgba(120, 230, 235, 0.9)';
     ctx.lineWidth = 3;
-    ctx.strokeRect(x0, y0, x1 - x0, y1 - y0);
+    ctx.beginPath();
+    ctx.arc(cx, cy, this.eyeR, 0, Math.PI * 2);
+    ctx.stroke();
+
     ctx.restore();
   }
 
@@ -1521,13 +1561,13 @@ export class MpSession {
     // storm is closing, a warning banner.
     this.drawWindIndicator();
 
-    if (this.stormFrac < 1) {
+    if (this.eyeR < EYE_MAX) {
       const ctx = this.ctx;
       ctx.save();
       ctx.font = 'bold 15px system-ui, sans-serif';
       ctx.textAlign = 'center';
       ctx.textBaseline = 'top';
-      const text = '⚠ STORM CLOSING — GET TO THE EYE';
+      const text = '🌀 MAELSTROM — STAY IN THE EYE';
       const x = ctx.canvas.width / 2;
       ctx.lineWidth = 3;
       ctx.strokeStyle = 'rgba(0, 0, 0, 0.6)';

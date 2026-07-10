@@ -227,6 +227,7 @@ export function decideBot(
   ships: Ship[],
   islands: IslandData[],
   wind: Wind,
+  eye?: { x: number; y: number; r: number },
 ): BotDecision {
   const enemies = ships.filter((s) => s !== self && s.alive);
   if (!self.alive || enemies.length === 0) return { turn: 0, fire: false };
@@ -261,6 +262,12 @@ export function decideBot(
   else if (raker) desired = evadeHeading(self, raker, enemies, islands, wind);
   else if (ramTarget) desired = Math.atan2(ramTarget.y - self.y, ramTarget.x - self.x);
   else desired = fightHeading(self, target, wind);
+
+  // Caught outside the whirlpool eye? Making it back to safety overrides all —
+  // the storm damage will grind you down otherwise.
+  if (eye && Math.hypot(eye.x - self.x, eye.y - self.y) > eye.r) {
+    desired = Math.atan2(eye.y - self.y, eye.x - self.x);
+  }
 
   const diff = angleDiff(desired, self.heading);
   const wantedTurn: Turn = diff > DEAD_ZONE ? 1 : diff < -DEAD_ZONE ? -1 : 0;
