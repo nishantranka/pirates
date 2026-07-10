@@ -50,6 +50,8 @@ export interface ShipState {
   dbl: boolean; // double-broadside active
   mg: boolean; // machine-gun active
   inv: boolean; // spawn-protection (invulnerable) active
+  depth: number; // submarine: 0 surfaced → 1 fully submerged
+  charge: number; // submarine dive charge, 0..1
   score: number; // weighted battle score
   kills: number; // enemies sunk
 }
@@ -59,6 +61,7 @@ export interface BallState {
   y: number;
   vx: number;
   vy: number;
+  tp?: boolean; // torpedo (rendered differently)
 }
 
 export type GameEvent =
@@ -73,7 +76,7 @@ export type C2HMsg =
   | { t: 'hello'; name: string }
   | { t: 'choose'; ship: ShipTypeName }
   | { t: 'ready'; ready: boolean }
-  | { t: 'input'; turn: Turn; fire: boolean };
+  | { t: 'input'; turn: Turn; fire: boolean; dive: boolean };
 
 /** Host → guest. */
 export type H2CMsg =

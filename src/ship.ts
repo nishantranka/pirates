@@ -12,13 +12,19 @@ export interface ShipStats {
 // Small ships are fast but fragile; large ships are slow but tough.
 // Speed and turn rate are 1.5× the base tuning for a brisker pace (handling
 // ratio is preserved since both scale together).
+// The submarine (multiplayer only) is engine-powered — wind never touches it —
+// fires a single bow torpedo, and can dive to evade (see multiplayer.ts).
 export const SHIP_TYPES = {
   small: { speed: 165, turnRate: 2.4, maxHealth: 3, guns: 2, length: 42, width: 17 },
   medium: { speed: 120, turnRate: 1.8, maxHealth: 5, guns: 3, length: 56, width: 22 },
   large: { speed: 82.5, turnRate: 1.35, maxHealth: 8, guns: 4, length: 72, width: 28 },
+  submarine: { speed: 120, turnRate: 1.8, maxHealth: 4, guns: 1, length: 58, width: 16 },
 } as const satisfies Record<string, ShipStats>;
 
 export type ShipTypeName = keyof typeof SHIP_TYPES;
+
+/** The classic sailing hulls — what single-player and bots choose from. */
+export const SAIL_TYPES: ShipTypeName[] = ['small', 'medium', 'large'];
 
 const SINK_DURATION = 1.5; // s to fade out after health hits 0
 
@@ -35,6 +41,9 @@ export class Ship {
   sinkProgress = 0; // 0 afloat → 1 fully sunk
   shield = 0; // remaining shield hits that will be absorbed (multiplayer power-up)
   boostFactor = 1; // speed multiplier from the speed power-up
+  depth = 0; // submarine: 0 surfaced → 1 fully submerged
+  /** Fading wake behind the hull; purely visual, maintained by the renderer. */
+  wake: Array<{ x: number; y: number; t: number }> = [];
 
   readonly type: ShipTypeName;
   readonly length: number;
@@ -102,12 +111,44 @@ export class Ship {
     if (this.sinkProgress >= 1) return;
 
     ctx.save();
-    ctx.globalAlpha = 1 - this.sinkProgress;
+    // Sinking fades the hull; a diving submarine dims and shrinks slightly.
+    ctx.globalAlpha = (1 - this.sinkProgress) * (1 - 0.45 * this.depth);
     ctx.translate(this.x, this.y);
     ctx.rotate(this.heading);
+    const dive = 1 - 0.15 * this.depth;
+    ctx.scale(dive, dive);
 
     const l = this.length;
     const w = this.width;
+
+    if (this.type === 'submarine') {
+      // Cigar hull with a rounded bow and tapered stern.
+      ctx.beginPath();
+      ctx.moveTo(l / 2, 0);
+      ctx.quadraticCurveTo(l / 3, -w / 2, -l / 3, -w / 2);
+      ctx.quadraticCurveTo(-l / 2, -w / 6, -l / 2, 0);
+      ctx.quadraticCurveTo(-l / 2, w / 6, -l / 3, w / 2);
+      ctx.quadraticCurveTo(l / 3, w / 2, l / 2, 0);
+      ctx.closePath();
+      ctx.fillStyle = this.hullColor;
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(0, 0, 0, 0.5)';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+
+      // Conning tower + periscope dot.
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.35)';
+      ctx.beginPath();
+      ctx.ellipse(-l * 0.05, 0, l * 0.16, w * 0.32, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#e8e8e8';
+      ctx.beginPath();
+      ctx.arc(l * 0.06, 0, 2.2, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.restore();
+      return;
+    }
 
     // Hull: pointed bow (+x), flat stern.
     ctx.beginPath();

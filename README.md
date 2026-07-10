@@ -56,15 +56,26 @@ battle once 2–11 captains are in. Solo? Hit **Fill with Bots** for an instant
   broadcasts 30 Hz snapshots; guests send steering/fire inputs and render with
   smoothing. Rooms are matched through the free public PeerJS broker, then all
   game traffic flows peer-to-peer.
+- **Submarine** — a fourth multiplayer boat: engine-powered (wind never touches
+  it) and armed with a single **bow torpedo** — faster, longer-ranged, and
+  harder-hitting than a cannonball. Hold **↓/S to dive**: while submerged
+  you're invisible and immune to shots and rams, but you can't fire or grab
+  pickups, and a dive-charge meter limits your time under (refills on the
+  surface). Islands still sink you; the maelstrom still pulls you. Power-ups
+  adapt: Double gives a torpedo spread, Rapid Fire a torpedo stream.
+- **Wakes & you-marker** — every ship leaves a fading wake as it sails (subs
+  leave none while under), and a bobbing red triangle marks your own ship.
+- **How to play** — the ❓ button (top-left) opens a full rules reference:
+  wind, combat, islands, ramming, power-ups, submarine, maelstrom, scoring.
 - **Bots** — no friends online? The host can fill empty slots with AI captains
-  (**Add Bot 🤖** one at a time, or **Fill with Bots** for a full 10-bot
-  lobby). Bots hunt the most promising target
+  (**Add Bot 🤖** one at a time, or **Fill with Bots** for a full 20-bot
+  lobby, 21 captains total). Bots hunt the most promising target
   (close and already damaged), lead their shots with the wind, hold fire when
   an island blocks the shot, and when wounded they break off and run for
   cover, favoring fast points of sail and keeping islands between themselves
   and the threat.
 - **Scoring & leaderboard** — you're ranked by a weighted score: **sinking**
-  enemies counts most, **damage dealt** next, and **time survived** least. A
+  enemies counts most (8 pts), **damage dealt** next, and **time survived** least. A
   collapsible standings panel sits top-right (collapsed to a pill showing the
   current leader; click to expand the full ranked board), and the **final
   standings are shown on the end screen**. The captain with the highest score

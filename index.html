@@ -24,6 +24,101 @@
     <!-- Sound on/off (also toggled with the M key) -->
     <button id="mute-toggle" type="button" title="Mute (M)">🔊</button>
 
+    <!-- How to play -->
+    <button id="help-toggle" type="button" title="How to play">❓</button>
+
+    <!-- Rules / mechanics reference -->
+    <div id="rules-overlay" class="hidden">
+      <div class="modal rules-modal">
+        <div class="modal-scroll rules-content">
+          <h1>How to Play</h1>
+
+          <h2>⛵ Goal &amp; Controls</h2>
+          <p>
+            Your ship always sails forward — you only steer: <b>← →</b> or <b>A D</b>.
+            Fire with <b>Space</b>. Submarines dive with <b>↓</b> or <b>S</b> (hold).
+            <b>M</b> mutes sound. In multiplayer the last captain standing — by score — rules the seas.
+          </p>
+
+          <h2>🌬️ Wind</h2>
+          <p>
+            The compass (top-left) shows the wind. Your speed depends on your angle to it:
+            sailing across the wind is fastest (~100%+), straight downwind a bit slower,
+            and beating into the wind crawls at 40%. The wind drifts during battle and
+            affects everyone equally — except submarines, which run on engines and ignore it.
+          </p>
+
+          <h2>💥 Combat</h2>
+          <p>
+            Cannons fire a broadside from whichever side faces the nearest enemy — shots fly
+            <b>perpendicular to your heading</b>, so maneuver to bring your guns to bear.
+            Reload is 1.4s for everyone, bots included. <b>Damage falls off with distance</b>:
+            point-blank hits hurt ~2.5× more than max-range grazes.
+          </p>
+
+          <h2>🏝️ Islands</h2>
+          <p>
+            Blocky islands are deadly: the translucent blue ring is shallow water (safe),
+            but <b>touching the sand sinks you instantly</b>. Islands also block cannonballs,
+            so use them as cover — bait pursuers through tight gaps.
+          </p>
+
+          <h2>🚤 Ramming</h2>
+          <p>
+            Drive your <b>bow into an enemy's flank</b> to spike them: damage scales with your
+            speed, how bow-on the hit is, and your hull size. Glancing scrapes just shove ships
+            apart. The rammer takes only ~10% back — a boosted or Large ship is a battering ram.
+          </p>
+
+          <h2>🎁 Power-ups</h2>
+          <p>Labeled bounties bob in the water, often just off a lethal shore (risk vs reward). Surface ships and surfaced subs can grab them:</p>
+          <ul>
+            <li><b>➕ +1 Health</b> — heals one point (spawns often)</li>
+            <li><b>⛨ Shield ×5</b> — absorbs the next 5 hits</li>
+            <li><b>⚡ 2× Speed</b> — double speed for 8s</li>
+            <li><b>⇄ Dbl Broadside</b> — fire both sides at once for 12s (subs: torpedo spread)</li>
+            <li><b>⁘ Rapid Fire</b> — your next shot opens 5s of continuous fire</li>
+          </ul>
+
+          <h2>🤿 Submarine</h2>
+          <p>
+            A multiplayer-only boat: engine-powered (ignores wind), fires a single
+            <b>bow torpedo</b> — faster, longer-ranged and harder-hitting than a cannonball.
+            Hold <b>↓/S</b> to dive: while under you're <b>invisible and immune to shots and
+            rams</b>, but you can't fire or grab pickups, and your dive charge (cyan bar)
+            drains — it refills on the surface. Islands still sink you, and the maelstrom
+            still pulls you.
+          </p>
+
+          <h2>🌀 Maelstrom</h2>
+          <p>
+            After a short calm, a whirlpool forms at the arena's center: an inward current
+            tows every ship toward the middle (stronger outside the shrinking calm eye), so
+            the fight always converges. There's no damage — but you can't out-sail it at
+            full strength.
+          </p>
+
+          <h2>🏆 Scoring</h2>
+          <p>
+            Your score = <b>sinking shots</b> (8 pts, weighted most) + <b>damage dealt</b>
+            (1 pt per hull point) + <b>time survived</b> (0.1 pt/s, weighted least). The
+            round ends when one ship remains or every human is dead — the top score wins.
+            Click the 🏆 pill (top-right) for live standings.
+          </p>
+
+          <h2>🤖 Multiplayer &amp; Bots</h2>
+          <p>
+            Create a room and share the 5-letter code, or hit <b>Fill with Bots</b> for an
+            instant 20-bot brawl (up to 21 captains). Everyone spawns scattered under a 2s
+            golden spawn shield. If you sink, the round ends — you never spectate bots.
+          </p>
+        </div>
+        <div class="modal-footer">
+          <button id="rules-close">Close</button>
+        </div>
+      </div>
+    </div>
+
     <!-- Collapsible live standings (multiplayer). Collapsed to a pill by default. -->
     <div id="leaderboard" class="hidden">
       <button id="lb-toggle" type="button"><span id="lb-toggle-text">🏆 Leaderboard</span></button>
@@ -38,6 +133,11 @@
 
           <div class="section-label">Game mode</div>
           <div class="card-row" id="mode-cards"></div>
+
+          <div id="practice-section">
+            <div class="section-label">Practice mode</div>
+            <div class="card-row" id="practice-cards"></div>
+          </div>
 
           <div id="player-section">
             <div class="section-label">Your ship</div>
@@ -70,7 +170,7 @@
 
         <div class="modal-footer">
           <button id="set-sail">⚓ Set Sail</button>
-          <div class="hint">← → or A D to steer &nbsp;·&nbsp; Space to fire</div>
+          <div class="hint">← → or A D to steer &nbsp;·&nbsp; Space to fire &nbsp;·&nbsp; ↓ or S to dive (submarine) &nbsp;·&nbsp; ❓ for rules</div>
         </div>
       </div>
     </div>

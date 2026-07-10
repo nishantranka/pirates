@@ -2,7 +2,7 @@ import { Game, DIFFICULTIES, type DifficultyName } from './game';
 import { Input } from './input';
 import { MpSession, MAX_PLAYERS, PLAYER_COLORS, type LeaderboardEntry } from './multiplayer';
 import { CODE_LENGTH, type LobbyPlayerInfo } from './net';
-import { SHIP_TYPES, type ShipTypeName } from './ship';
+import { SAIL_TYPES, SHIP_TYPES, type ShipTypeName } from './ship';
 import './style.css';
 
 // Sound on/off, remembered across sessions.
@@ -56,6 +56,7 @@ const SPEED_LABELS: Record<ShipTypeName, string> = {
   small: 'fast',
   medium: 'steady',
   large: 'slow',
+  submarine: 'engine',
 };
 
 const NEXT_DIFFICULTY: Partial<Record<DifficultyName, DifficultyName>> = {
@@ -68,8 +69,10 @@ const SHIP_ORDER: ShipTypeName[] = ['small', 'medium', 'large'];
 
 // ── Selection state ───────────────────────────────────────────────────────────
 
-type GameMode = 'normal' | 'survivor' | 'multiplayer';
-let selectedMode: GameMode = 'normal';
+type GameMode = 'practice' | 'multiplayer';
+type PracticeMode = 'duel' | 'survivor';
+let selectedMode: GameMode = 'practice';
+let selectedPractice: PracticeMode = 'duel';
 let selectedPlayer: ShipTypeName = 'small';
 let selectedEnemy: ShipTypeName | 'random' = 'random';
 let selectedDifficulty: DifficultyName = 'easy';
@@ -103,9 +106,11 @@ const difficultySection = document.getElementById('difficulty-section')!;
 const mpSection = document.getElementById('mp-section')!;
 const setSailBtn = document.getElementById('set-sail')!;
 
+const practiceSection = document.getElementById('practice-section')!;
+const practiceRow = document.getElementById('practice-cards')!;
+
 const modeOptions: Array<{ key: GameMode; label: string; stat: string }> = [
-  { key: 'normal', label: 'Normal', stat: 'one battle · win or lose' },
-  { key: 'survivor', label: 'Survivor', stat: 'fight until you sink' },
+  { key: 'practice', label: 'Practice', stat: 'vs a bot · 1v1 or survivor' },
   { key: 'multiplayer', label: 'Multiplayer', stat: 'free-for-all · bots or online' },
 ];
 
@@ -121,18 +126,35 @@ modeOptions.forEach(({ key, label, stat }) => {
 
 selectCard(modeRow, selectedMode);
 
+// Practice sub-modes: a single duel or endless survivor waves, both vs bot AI.
+const practiceOptions: Array<{ key: PracticeMode; label: string; stat: string }> = [
+  { key: 'duel', label: '1v1', stat: 'one battle · win or lose' },
+  { key: 'survivor', label: 'Survivor', stat: 'fight until you sink' },
+];
+practiceOptions.forEach(({ key, label, stat }) => {
+  const card = makeCard(label, stat, key);
+  card.addEventListener('click', () => {
+    selectedPractice = key;
+    selectCard(practiceRow, key);
+    updateModeUI();
+  });
+  practiceRow.appendChild(card);
+});
+selectCard(practiceRow, selectedPractice);
+
 function updateModeUI() {
   const mp = selectedMode === 'multiplayer';
+  practiceSection.classList.toggle('hidden', mp);
   playerSection.classList.toggle('hidden', mp);
   difficultySection.classList.toggle('hidden', mp);
-  enemySection.classList.toggle('hidden', mp || selectedMode === 'survivor');
+  enemySection.classList.toggle('hidden', mp || selectedPractice === 'survivor');
   mpSection.classList.toggle('hidden', !mp);
   setSailBtn.classList.toggle('hidden', mp);
 }
 
-// Player ship cards
+// Player ship cards (practice keeps the classic sailing hulls)
 const playerRow = document.getElementById('player-cards')!;
-(Object.keys(SHIP_TYPES) as ShipTypeName[]).forEach((type) => {
+SAIL_TYPES.forEach((type) => {
   const s = SHIP_TYPES[type];
   const card = makeCard(
     type[0].toUpperCase() + type.slice(1),
@@ -149,7 +171,7 @@ selectCard(playerRow, selectedPlayer);
 
 // Enemy ship cards (includes Random)
 const enemyRow = document.getElementById('enemy-cards')!;
-(Object.keys(SHIP_TYPES) as ShipTypeName[]).forEach((type) => {
+SAIL_TYPES.forEach((type) => {
   const s = SHIP_TYPES[type];
   const card = makeCard(
     type[0].toUpperCase() + type.slice(1),
@@ -210,7 +232,7 @@ function startSurvivor() {
 function setSail() {
   if (selectedMode === 'multiplayer') return;
   menuOverlay.classList.add('hidden');
-  if (selectedMode === 'survivor') {
+  if (selectedPractice === 'survivor') {
     startSurvivor();
   } else {
     game.survivorKills = null;
@@ -223,7 +245,7 @@ document.getElementById('set-sail')!.addEventListener('click', setSail);
 // ── Game-over handling ────────────────────────────────────────────────────────
 
 game.onGameOver = (won: boolean) => {
-  if (selectedMode === 'survivor') {
+  if (selectedPractice === 'survivor') {
     if (won) {
       // Enemy sunk — spawn the next wave without showing the game-over overlay.
       survivorKills++;
@@ -261,7 +283,7 @@ game.onGameOver = (won: boolean) => {
 
 btnReplay.addEventListener('click', () => {
   gameoverOverlay.classList.add('hidden');
-  if (selectedMode === 'survivor') {
+  if (selectedPractice === 'survivor') {
     startSurvivor();
   } else {
     game.startBattle(selectedPlayer, selectedEnemy, selectedDifficulty);
@@ -287,7 +309,7 @@ btnMenu.addEventListener('click', () => {
 window.addEventListener('keydown', (e) => {
   if (e.code === 'KeyR' && !gameoverOverlay.classList.contains('hidden')) {
     gameoverOverlay.classList.add('hidden');
-    if (selectedMode === 'survivor') {
+    if (selectedPractice === 'survivor') {
       startSurvivor();
     } else {
       game.startBattle(selectedPlayer, selectedEnemy, selectedDifficulty);
@@ -327,13 +349,14 @@ let myReady = false;
 let myShip: ShipTypeName = 'small';
 
 // Ship cards inside the lobby — each captain picks their own boat.
+// Multiplayer also offers the submarine (torpedoes, dives, engine-powered).
 (Object.keys(SHIP_TYPES) as ShipTypeName[]).forEach((type) => {
   const s = SHIP_TYPES[type];
-  const card = makeCard(
-    type[0].toUpperCase() + type.slice(1),
-    `${s.guns} guns · ${SPEED_LABELS[type]} · ${s.maxHealth} hp`,
-    type,
-  );
+  const stat =
+    type === 'submarine'
+      ? `torpedo · dives · ${s.maxHealth} hp`
+      : `${s.guns} guns · ${SPEED_LABELS[type]} · ${s.maxHealth} hp`;
+  const card = makeCard(type[0].toUpperCase() + type.slice(1), stat, type);
   card.addEventListener('click', () => {
     myShip = type;
     selectCard(lobbyShipRow, type);
@@ -608,3 +631,15 @@ window.addEventListener('keydown', (e) => {
   if (e.code === 'KeyM' && !(e.target instanceof HTMLInputElement)) toggleMute();
 });
 updateMuteBtn();
+
+// ── How to play (rules) overlay ───────────────────────────────────────────────
+
+const rulesOverlay = document.getElementById('rules-overlay')!;
+const helpBtn = document.getElementById('help-toggle')!;
+const rulesClose = document.getElementById('rules-close')!;
+
+helpBtn.addEventListener('click', () => rulesOverlay.classList.toggle('hidden'));
+rulesClose.addEventListener('click', () => rulesOverlay.classList.add('hidden'));
+window.addEventListener('keydown', (e) => {
+  if (e.code === 'Escape') rulesOverlay.classList.add('hidden');
+});

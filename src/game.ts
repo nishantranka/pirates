@@ -2,7 +2,7 @@ import { decideTurn, wantsToFire } from './ai';
 import { Cannonball } from './cannonball';
 import { Explosion } from './explosion';
 import type { Input } from './input';
-import { Ship, SHIP_TYPES, type ShipTypeName, type Turn } from './ship';
+import { SAIL_TYPES, Ship, type ShipTypeName, type Turn } from './ship';
 import { Wind } from './wind';
 
 const MAX_DT = 0.05;
@@ -123,8 +123,7 @@ export class Game {
     const { width: w, height: h } = this.ctx.canvas;
     let resolvedEnemy = enemyType;
     if (resolvedEnemy === 'random') {
-      const types = Object.keys(SHIP_TYPES) as ShipTypeName[];
-      resolvedEnemy = types[Math.floor(Math.random() * types.length)];
+      resolvedEnemy = SAIL_TYPES[Math.floor(Math.random() * SAIL_TYPES.length)];
     }
 
     this.difficulty = difficulty;

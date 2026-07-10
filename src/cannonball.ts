@@ -3,38 +3,51 @@ import type { Ship } from './ship';
 export const CANNONBALL_SPEED = 390; // px/s (1.5× base, matching the faster ships)
 const MAX_RANGE = 320; // px before the ball splashes into the sea
 
+// Submarine bow torpedoes: faster, longer-legged, harder-hitting single shot.
+export const TORPEDO_SPEED = 460;
+export const TORPEDO_RANGE = 430;
+export const TORPEDO_DAMAGE = 1.6;
+
 export class Cannonball {
   x: number;
   y: number;
   spent = false;
   readonly owner: Ship;
+  readonly torpedo: boolean;
 
   readonly vx: number;
   readonly vy: number;
+  private readonly speed: number;
+  private readonly range: number;
+  private readonly baseDamage: number;
   private traveled = 0;
 
-  constructor(x: number, y: number, direction: number, owner: Ship) {
+  constructor(x: number, y: number, direction: number, owner: Ship, torpedo = false) {
     this.x = x;
     this.y = y;
-    this.vx = Math.cos(direction) * CANNONBALL_SPEED;
-    this.vy = Math.sin(direction) * CANNONBALL_SPEED;
+    this.torpedo = torpedo;
+    this.speed = torpedo ? TORPEDO_SPEED : CANNONBALL_SPEED;
+    this.range = torpedo ? TORPEDO_RANGE : MAX_RANGE;
+    this.baseDamage = torpedo ? TORPEDO_DAMAGE : 1;
+    this.vx = Math.cos(direction) * this.speed;
+    this.vy = Math.sin(direction) * this.speed;
     this.owner = owner;
   }
 
   update(dt: number) {
     this.x += this.vx * dt;
     this.y += this.vy * dt;
-    this.traveled += CANNONBALL_SPEED * dt;
-    if (this.traveled >= MAX_RANGE) this.spent = true;
+    this.traveled += this.speed * dt;
+    if (this.traveled >= this.range) this.spent = true;
   }
 
-  /** Impact falls off with distance flown: point-blank ≈ 1, max range ≈ 0.4. */
+  /** Impact falls off with distance flown: point-blank ≈ full, max range ≈ 40%. */
   get damage(): number {
-    return 1 - 0.6 * Math.min(this.traveled / MAX_RANGE, 1);
+    return this.baseDamage * (1 - 0.6 * Math.min(this.traveled / this.range, 1));
   }
 
   draw(ctx: CanvasRenderingContext2D) {
-    drawCannonball(ctx, this.x, this.y, this.vx, this.vy);
+    drawCannonball(ctx, this.x, this.y, this.vx, this.vy, this.torpedo);
   }
 }
 
@@ -50,20 +63,21 @@ export function drawCannonball(
   y: number,
   vx: number,
   vy: number,
+  torpedo = false,
 ) {
   const sp = Math.hypot(vx, vy) || 1;
   const ux = vx / sp;
   const uy = vy / sp;
 
-  const tailX = x - ux * 16;
-  const tailY = y - uy * 16;
+  const tailX = x - ux * (torpedo ? 22 : 16);
+  const tailY = y - uy * (torpedo ? 22 : 16);
   const headX = x + ux * 3;
   const headY = y + uy * 3;
 
   ctx.lineCap = 'round';
 
-  // Outer glow.
-  ctx.strokeStyle = 'rgba(255, 90, 40, 0.35)';
+  // Outer glow — warm for cannonballs, cold cyan for torpedoes.
+  ctx.strokeStyle = torpedo ? 'rgba(80, 220, 255, 0.4)' : 'rgba(255, 90, 40, 0.35)';
   ctx.lineWidth = 5;
   ctx.beginPath();
   ctx.moveTo(tailX, tailY);

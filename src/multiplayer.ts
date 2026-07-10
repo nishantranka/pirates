@@ -32,14 +32,14 @@ import {
   type ShipSpawn,
   type ShipState,
 } from './net';
-import { Ship, SHIP_TYPES, type ShipTypeName, type Turn } from './ship';
+import { SAIL_TYPES, Ship, SHIP_TYPES, type ShipTypeName, type Turn } from './ship';
 import { Wind } from './wind';
 import type { DataConnection } from 'peerjs';
 
 export const WORLD_W = 1600;
 export const WORLD_H = 1000;
 
-export const MAX_PLAYERS = 11; // one human host + up to 10 bots (or more humans)
+export const MAX_PLAYERS = 21; // one human host + up to 20 bots (or more humans)
 const MAX_DT = 0.05;
 const RELOAD = 1.4; // s between broadsides, same for everyone
 
@@ -54,7 +54,16 @@ const SHIELD_HITS = 5; // incoming hits absorbed
 // Win score weights: sinking an enemy matters most, damage next, survival least.
 const SCORE_TIME = 0.1; // per second alive
 const SCORE_DAMAGE = 1; // per point of hull damage dealt
-const SCORE_KILL = 10; // per enemy sunk
+const SCORE_KILL = 8; // per enemy sunk
+
+// Submarine diving: hold ↓/S. While submerged you're invisible & untouchable,
+// but you can't fire or grab pickups — and the charge meter limits your time under.
+const DIVE_MAX = 6; // s of submersion charge
+const DIVE_REFILL = 0.55; // charge regained per second while surfaced
+const DIVE_ANIM = 1.0; // s to fully submerge or surface
+const SUB_IMMUNE = 0.6; // depth beyond which shots/rams pass over
+const SUB_HIDDEN = 0.5; // depth beyond which enemies can't see you
+const MG_RELOAD_SUB = 0.35; // rapid-fire cadence for torpedoes
 
 // Ramming (bow-spike model): damage scales with speed, how bow-on the hit is,
 // and hull size. Driving your bow into an enemy's flank is devastating.
@@ -126,6 +135,16 @@ export const PLAYER_COLORS = [
   '#9c4a1f', // sienna
   '#37507a', // steel blue
   '#7a1f5a', // plum
+  '#2d7a6b', // sea green
+  '#8a2d2d', // brick
+  '#5f4a8a', // violet
+  '#7a6b1f', // mustard
+  '#1f4a7a', // navy
+  '#8a5f2d', // caramel
+  '#4a7a2d', // moss
+  '#7a2d4a', // wine
+  '#2d5f8a', // cerulean
+  '#6b2d7a', // orchid
 ];
 
 const BOT_NAMES = [
@@ -140,8 +159,16 @@ const BOT_NAMES = [
   'Rusty Rourke',
   'Scurvy Sam',
   'Tessa Tide',
+  'Dread Ned',
+  'Foggy Meg',
+  'Hook-Hand Hal',
+  'Stormy Sue',
+  'Powder Pip',
+  'Keelhaul Kit',
+  'Marooned Moe',
+  'Siren Sadie',
+  'Cannonball Cass',
 ];
-const SHIP_NAMES = Object.keys(SHIP_TYPES) as ShipTypeName[];
 
 // Spawn points evenly spaced on a ring so a crowded free-for-all starts fair,
 // every ship facing the melee at the center.
@@ -243,6 +270,7 @@ interface HostPlayer {
   bot: boolean;
   turn: Turn;
   fire: boolean;
+  dive: boolean;
 }
 
 export interface MpCallbacks {
@@ -289,7 +317,7 @@ export class MpSession {
   private ballStates: BallState[] = [];
   private lastSnapAt = 0;
   private inputAcc = 0;
-  private lastSent = { turn: 0 as Turn, fire: false };
+  private lastSent = { turn: 0 as Turn, fire: false, dive: false };
 
   // Shared battle state (host simulates; guest mirrors)
   private you = 0;
@@ -306,6 +334,8 @@ export class MpSession {
   private scoreView: { score: number; kills: number }[] = []; // host + guest (leaderboard)
   private ramCd: number[] = []; // per-ship ram-damage cooldown (host)
   private spawnUntil: number[] = []; // per-ship spawn-invulnerability expiry (host)
+  private diveCharge: number[] = []; // per-ship submarine dive charge (host)
+  private guestCharge: number[] = []; // dive charge fractions mirrored from snapshots (guest)
   private eyeR = EYE_MAX; // whirlpool eye radius (host computes, guest mirrors)
   private wind = new Wind();
   private explosions: Explosion[] = [];
@@ -348,7 +378,7 @@ export class MpSession {
   ): MpSession {
     const s = new MpSession(true, ctx, input, cb, sounds);
     s.players = [
-      { conn: null, name: cleanName(name), ship: 'small', ready: false, connected: true, bot: false, turn: 0, fire: false },
+      { conn: null, name: cleanName(name), ship: 'small', ready: false, connected: true, bot: false, turn: 0, fire: false, dive: false },
     ];
     // Open the lobby immediately so bot play never waits on (or requires) the
     // matchmaking broker; the room code fills in when/if the broker responds.
@@ -419,12 +449,13 @@ export class MpSession {
     return {
       conn: null,
       name,
-      ship: SHIP_NAMES[Math.floor(Math.random() * SHIP_NAMES.length)],
+      ship: SAIL_TYPES[Math.floor(Math.random() * SAIL_TYPES.length)],
       ready: true,
       connected: true,
       bot: true,
       turn: 0,
       fire: false,
+      dive: false,
     };
   }
 
@@ -520,6 +551,7 @@ export class MpSession {
         bot: false,
         turn: 0,
         fire: false,
+        dive: false,
       });
       this.pushLobby();
       return;
@@ -537,6 +569,7 @@ export class MpSession {
     } else if (msg.t === 'input') {
       player.turn = msg.turn === -1 || msg.turn === 1 ? msg.turn : 0;
       player.fire = !!msg.fire;
+      player.dive = !!msg.dive;
     }
   }
 
@@ -624,6 +657,7 @@ export class MpSession {
     this.scoreView = this.spawns.map(() => ({ score: 0, kills: 0 }));
     this.ramCd = this.spawns.map(() => 0);
     this.spawnUntil = this.spawns.map(() => SPAWN_PROTECT); // clock starts at 0
+    this.diveCharge = this.spawns.map(() => DIVE_MAX);
     this.eyeR = EYE_MAX;
     this.pickupTimers = { ...ZERO_TIMERS };
     for (const type of PICKUP_ORDER) {
@@ -661,6 +695,7 @@ export class MpSession {
             ? 1
             : 0;
       this.players[0].fire = this.input.isDown('Space');
+      this.players[0].dive = this.input.isDown('ArrowDown') || this.input.isDown('KeyS');
 
       const eye =
         this.eyeR < EYE_MAX ? { x: WORLD_W / 2, y: WORLD_H / 2, r: this.eyeR } : undefined;
@@ -676,7 +711,20 @@ export class MpSession {
       ship.boostFactor =
         this.phase === 'battle' && this.buffs[i].speedUntil > this.clock ? SPEED_MULT : 1;
       const turn: Turn = this.phase === 'battle' && this.players[i].connected ? this.players[i].turn : 0;
-      ship.update(dt, turn, WORLD_W, WORLD_H, this.wind.speedFactor(ship.heading));
+
+      // Submarine diving: hold to submerge while the charge lasts; the charge
+      // refills on the surface. Other hulls stay pinned to depth 0.
+      if (ship.type === 'submarine' && ship.alive) {
+        const wantDive =
+          this.phase === 'battle' && this.players[i].connected && this.players[i].dive && this.diveCharge[i] > 0;
+        ship.depth = Math.max(0, Math.min(1, ship.depth + ((wantDive ? 1 : -1) * dt) / DIVE_ANIM));
+        if (ship.depth > 0.15 && wantDive) this.diveCharge[i] = Math.max(0, this.diveCharge[i] - dt);
+        else if (ship.depth === 0) this.diveCharge[i] = Math.min(DIVE_MAX, this.diveCharge[i] + DIVE_REFILL * dt);
+      }
+
+      // Submarines are engine-powered — the wind never touches them.
+      const sf = ship.type === 'submarine' ? 1 : this.wind.speedFactor(ship.heading);
+      ship.update(dt, turn, WORLD_W, WORLD_H, sf);
       // Running aground is fatal — islands are obstacles, not bumpers.
       // (Spawn-protected ships are unsinkable for their grace period.)
       if (ship.alive && this.spawnUntil[i] <= this.clock && shipHitsIsland(this.islands, ship)) {
@@ -693,12 +741,15 @@ export class MpSession {
     if (this.phase === 'battle') {
       this.ships.forEach((ship, i) => {
         if (!ship.alive || !this.players[i].connected) return;
+        if (ship.depth > 0.15) return; // guns don't work underwater
         const b = this.buffs[i];
+        const sub = ship.type === 'submarine';
 
-        // Machine gun: rapid continuous fire on one side for its duration.
+        // Machine gun: rapid continuous fire (torpedo stream for submarines).
         if (b.mgUntil > this.clock) {
           if (ship.reload <= 0) {
-            this.fireSide(ship, b.mgSide, MG_RELOAD);
+            if (sub) this.fireTorpedo(ship, MG_RELOAD_SUB, 0);
+            else this.fireSide(ship, b.mgSide, MG_RELOAD);
             this.pendingEvents.push({ e: 'fire' });
           }
           return;
@@ -707,13 +758,21 @@ export class MpSession {
         if (!this.players[i].fire || ship.reload > 0) return;
 
         if (b.mgArmed) {
-          // The trigger shot arms 5 s of machine-gun fire on the nearest side.
+          // The trigger shot arms 5 s of machine-gun fire.
           b.mgArmed = false;
           b.mgSide = this.chooseSide(ship);
           b.mgUntil = this.clock + MG_DURATION;
-          this.fireSide(ship, b.mgSide, MG_RELOAD);
+          if (sub) this.fireTorpedo(ship, MG_RELOAD_SUB, 0);
+          else this.fireSide(ship, b.mgSide, MG_RELOAD);
         } else if (b.doubleUntil > this.clock) {
-          this.fireBoth(ship);
+          if (sub) {
+            // Double for a submarine: a two-torpedo spread off the bow.
+            this.fireTorpedo(ship, RELOAD, 0.07);
+          } else {
+            this.fireBoth(ship);
+          }
+        } else if (sub) {
+          this.fireTorpedo(ship, RELOAD, 0);
         } else {
           this.fireBroadside(ship);
         }
@@ -728,6 +787,7 @@ export class MpSession {
       if (ball.spent || this.phase !== 'battle') continue;
       for (const ship of this.ships) {
         if (ship === ball.owner || !ship.alive) continue;
+        if (ship.depth > SUB_IMMUNE) continue; // shots pass over a submerged sub
         if (ship.containsPoint(ball.x, ball.y)) {
           ball.spent = true;
           const si = this.ships.indexOf(ship);
@@ -799,6 +859,7 @@ export class MpSession {
     let best = Infinity;
     for (const other of this.ships) {
       if (other === shooter || !other.alive) continue;
+      if (other.depth > SUB_HIDDEN) continue; // can't aim at what you can't see
       const d = Math.hypot(other.x - shooter.x, other.y - shooter.y);
       if (d < best) {
         best = d;
@@ -841,6 +902,23 @@ export class MpSession {
     this.fireSide(shooter, -1, RELOAD);
   }
 
+  /** Submarine bow torpedo(es); spread > 0 launches a symmetric pair. */
+  private fireTorpedo(shooter: Ship, reload: number, spread: number) {
+    const dirs = spread > 0 ? [shooter.heading - spread, shooter.heading + spread] : [shooter.heading];
+    for (const dir of dirs) {
+      this.balls.push(
+        new Cannonball(
+          shooter.x + Math.cos(shooter.heading) * (shooter.length / 2 + 4),
+          shooter.y + Math.sin(shooter.heading) * (shooter.length / 2 + 4),
+          dir,
+          shooter,
+          true,
+        ),
+      );
+    }
+    shooter.reload = reload;
+  }
+
   // ── Ramming (bow-spike) ───────────────────────────────────────────────────
 
   private updateRams(dt: number) {
@@ -849,9 +927,10 @@ export class MpSession {
     for (let i = 0; i < this.ships.length; i++) {
       const A = this.ships[i];
       if (!A.alive) continue;
+      if (A.depth > SUB_IMMUNE) continue; // a submerged sub passes under hulls
       for (let j = i + 1; j < this.ships.length; j++) {
         const B = this.ships[j];
-        if (!B.alive) continue;
+        if (!B.alive || B.depth > SUB_IMMUNE) continue;
 
         const dx = B.x - A.x;
         const dy = B.y - A.y;
@@ -986,7 +1065,7 @@ export class MpSession {
     for (const p of this.pickups) {
       for (let i = 0; i < this.ships.length; i++) {
         const ship = this.ships[i];
-        if (!ship.alive) continue;
+        if (!ship.alive || ship.depth > 0.3) continue; // must surface to grab bounties
         if (Math.hypot(ship.x - p.x, ship.y - p.y) < PICKUP_R + ship.width * 0.7) {
           this.applyPickup(i, p.type);
           this.pendingEvents.push({ e: 'grab', x: p.x, y: p.y, p: p.type });
@@ -1095,10 +1174,12 @@ export class MpSession {
         dbl: this.buffView[i]?.dbl ?? false,
         mg: this.buffView[i]?.mg ?? false,
         inv: this.buffView[i]?.inv ?? false,
+        depth: s.depth,
+        charge: this.diveCharge[i] / DIVE_MAX,
         score: this.scoreView[i]?.score ?? 0,
         kills: this.scoreView[i]?.kills ?? 0,
       })),
-      balls: this.balls.map((b) => ({ x: b.x, y: b.y, vx: b.vx, vy: b.vy })),
+      balls: this.balls.map((b) => ({ x: b.x, y: b.y, vx: b.vx, vy: b.vy, tp: b.torpedo })),
       wind: this.wind.direction,
       events: this.pendingEvents,
       pickups: this.pickups.map((p) => ({ t: p.type, x: p.x, y: p.y })),
@@ -1143,11 +1224,14 @@ export class MpSession {
           dbl: false,
           mg: false,
           inv: true,
+          depth: 0,
+          charge: 1,
           score: 0,
           kills: 0,
         }));
         this.buffView = msg.ships.map(() => ({ shield: 0, spd: false, dbl: false, mg: false, inv: true }));
         this.scoreView = msg.ships.map(() => ({ score: 0, kills: 0 }));
+        this.guestCharge = msg.ships.map(() => 1);
         this.eyeR = EYE_MAX;
         this.pickups = [];
         this.balls = [];
@@ -1155,7 +1239,7 @@ export class MpSession {
         this.explosions = [];
         this.splashes = [];
         this.wind = new Wind();
-        this.lastSent = { turn: 0, fire: false };
+        this.lastSent = { turn: 0, fire: false, dive: false };
         this.phase = 'battle';
         this.cb.onStart();
         this.startLoop();
@@ -1193,11 +1277,17 @@ export class MpSession {
             ? 1
             : 0;
       const fire = this.input.isDown('Space');
+      const dive = this.input.isDown('ArrowDown') || this.input.isDown('KeyS');
       this.inputAcc += dt;
-      if (turn !== this.lastSent.turn || fire !== this.lastSent.fire || this.inputAcc >= INPUT_INTERVAL) {
+      if (
+        turn !== this.lastSent.turn ||
+        fire !== this.lastSent.fire ||
+        dive !== this.lastSent.dive ||
+        this.inputAcc >= INPUT_INTERVAL
+      ) {
         this.inputAcc = 0;
-        this.lastSent = { turn, fire };
-        if (this.conn?.open) this.conn.send({ t: 'input', turn, fire } satisfies C2HMsg);
+        this.lastSent = { turn, fire, dive };
+        if (this.conn?.open) this.conn.send({ t: 'input', turn, fire, dive } satisfies C2HMsg);
       }
     }
 
@@ -1220,6 +1310,8 @@ export class MpSession {
       ship.health = t.health;
       ship.sinkProgress = t.sink;
       ship.shield = t.shield;
+      ship.depth = t.depth;
+      this.guestCharge[i] = t.charge;
       this.buffView[i] = { shield: t.shield, spd: t.spd, dbl: t.dbl, mg: t.mg, inv: t.inv };
       this.scoreView[i] = { score: t.score, kills: t.kills };
     });
@@ -1328,17 +1420,30 @@ export class MpSession {
       // Extrapolate a touch past the last snapshot so 30 Hz balls fly smoothly.
       const age = Math.min((performance.now() - this.lastSnapAt) / 1000, 0.12);
       for (const b of this.ballStates) {
-        drawCannonball(ctx, b.x + b.vx * age, b.y + b.vy * age, b.vx, b.vy);
+        drawCannonball(ctx, b.x + b.vx * age, b.y + b.vy * age, b.vx, b.vy, b.tp);
       }
     }
 
+    // Fading wakes first, so hulls draw over them.
+    const now = performance.now();
+    for (const ship of this.ships) {
+      this.updateWake(ship, now);
+      this.drawWake(ship, now);
+    }
+
     this.ships.forEach((ship, i) => {
+      // A submerged submarine is invisible to everyone but its own captain.
+      if (i !== this.you && ship.depth > SUB_HIDDEN) return;
       if (ship.sinkProgress < 1) this.drawShipBuffs(ship, i); // aura under the hull
       ship.draw(ctx);
       if (ship.sinkProgress < 1) {
         this.drawShipHealth(ship);
         this.drawBuffIcons(ship, i);
         this.drawNameTag(ship, this.spawns[i]?.name ?? '', i === this.you);
+        if (i === this.you) {
+          this.drawYouMarker(ship);
+          if (ship.type === 'submarine') this.drawDiveMeter(ship, i);
+        }
       }
     });
 
@@ -1505,6 +1610,69 @@ export class MpSession {
     ctx.restore();
   }
 
+  /** Sample the hull's stern position into its wake trail (no wake underwater). */
+  private updateWake(ship: Ship, now: number) {
+    // Prune old foam.
+    while (ship.wake.length && now - ship.wake[0].t > 1100) ship.wake.shift();
+    if (ship.sinkProgress > 0 || ship.depth > 0.3) return;
+    const last = ship.wake[ship.wake.length - 1];
+    if (last && now - last.t < 28) return;
+    const sx = ship.x - Math.cos(ship.heading) * ship.length * 0.45;
+    const sy = ship.y - Math.sin(ship.heading) * ship.length * 0.45;
+    if (last && Math.hypot(sx - last.x, sy - last.y) < 2) return; // barely moving
+    ship.wake.push({ x: sx, y: sy, t: now });
+  }
+
+  /** Fading white foam behind the hull — every ship leaves a wake as it sails. */
+  private drawWake(ship: Ship, now: number) {
+    if (!ship.wake.length) return;
+    const ctx = this.ctx;
+    for (const p of ship.wake) {
+      const age = (now - p.t) / 1100; // 0 fresh → 1 gone
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, 1.5 + 3.5 * age, 0, Math.PI * 2);
+      ctx.fillStyle = `rgba(255, 255, 255, ${(1 - age) * 0.28})`;
+      ctx.fill();
+    }
+  }
+
+  /** A small bobbing red triangle above your own ship so you always find yourself. */
+  private drawYouMarker(ship: Ship) {
+    const ctx = this.ctx;
+    const bob = Math.sin(performance.now() / 250) * 2.5;
+    const y = ship.y - ship.length * 0.62 - 24 + bob;
+    ctx.save();
+    ctx.globalAlpha = 1 - ship.sinkProgress;
+    ctx.fillStyle = '#e8281e';
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.85)';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(ship.x, y + 9); // tip points down at the ship
+    ctx.lineTo(ship.x - 7, y - 3);
+    ctx.lineTo(ship.x + 7, y - 3);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  /** Cyan dive-charge bar under your submarine's health bar. */
+  private drawDiveMeter(ship: Ship, i: number) {
+    const ctx = this.ctx;
+    const frac = this.isHost
+      ? (this.diveCharge[i] ?? 0) / DIVE_MAX
+      : (this.guestCharge[i] ?? 0);
+    const w = 40;
+    const y = ship.y - ship.length * 0.62 + 7;
+    ctx.save();
+    ctx.globalAlpha = 1 - ship.sinkProgress;
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
+    ctx.fillRect(ship.x - w / 2 - 1, y - 1, w + 2, 5);
+    ctx.fillStyle = '#4fd8ef';
+    ctx.fillRect(ship.x - w / 2, y, w * Math.max(0, Math.min(1, frac)), 3);
+    ctx.restore();
+  }
+
   /** A segmented health bar floating just above the hull, colored by how
    *  hurt the ship is — so you can pick off the weakest target at a glance. */
   private drawShipHealth(ship: Ship) {
@@ -1615,8 +1783,12 @@ export class MpSession {
     const me = this.ships[this.you];
     if (me) {
       ctx.fillStyle = 'rgba(255, 255, 255, 0.8)';
-      const pct = Math.round(this.wind.speedFactor(me.heading) * 100);
-      ctx.fillText(`Sails ${pct}%`, cx, cy + r + 32);
+      if (me.type === 'submarine') {
+        ctx.fillText('Engine', cx, cy + r + 32); // subs ignore the wind
+      } else {
+        const pct = Math.round(this.wind.speedFactor(me.heading) * 100);
+        ctx.fillText(`Sails ${pct}%`, cx, cy + r + 32);
+      }
     }
   }
 }

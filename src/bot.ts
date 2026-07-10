@@ -229,7 +229,8 @@ export function decideBot(
   wind: Wind,
   eye?: { x: number; y: number; r: number },
 ): BotDecision {
-  const enemies = ships.filter((s) => s !== self && s.alive);
+  // Submerged submarines are invisible — bots can't target what they can't see.
+  const enemies = ships.filter((s) => s !== self && s.alive && s.depth <= 0.5);
   if (!self.alive || enemies.length === 0) return { turn: 0, fire: false };
 
   // Nearest threat (for self-preservation) and best target (close + damaged).
