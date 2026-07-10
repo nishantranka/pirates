@@ -263,10 +263,21 @@ export function decideBot(
   else if (ramTarget) desired = Math.atan2(ramTarget.y - self.y, ramTarget.x - self.x);
   else desired = fightHeading(self, target, wind);
 
-  // Caught outside the whirlpool eye? Head back in — the current is dragging
-  // everyone toward the middle, so meet the fight there rather than fight it.
-  if (eye && Math.hypot(eye.x - self.x, eye.y - self.y) > eye.r) {
-    desired = Math.atan2(eye.y - self.y, eye.x - self.x);
+  // Whirlpool awareness: never sail out of the eye. If already outside, head
+  // straight back to the middle. If near the inner edge and the chosen heading
+  // would carry us out, turn in *before* crossing — the margin is our turning
+  // radius, so we come about while there's still room.
+  if (eye) {
+    const rx = self.x - eye.x;
+    const ry = self.y - eye.y;
+    const d = Math.hypot(rx, ry) || 1;
+    const outward = Math.atan2(ry, rx); // radially outward from the eye center
+    const turnRadius = (self.speed * self.boostFactor) / self.turnRate;
+    const margin = turnRadius + 25;
+    const headingOut = Math.cos(angleDiff(desired, outward)) > 0; // desired points outward-ish
+    if (d > eye.r || (d > eye.r - margin && headingOut)) {
+      desired = outward + Math.PI; // steer to the eye center
+    }
   }
 
   const diff = angleDiff(desired, self.heading);
