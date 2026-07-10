@@ -46,6 +46,8 @@ const game = new Game(ctx, input);
 game.onCannonFire = playCannonFire;
 game.onHit = playExplosion;
 game.start();
+// Dev-only hook so E2E tests can observe practice mode; stripped in prod.
+if (import.meta.env.DEV) (window as unknown as { __game: Game }).__game = game;
 
 window.addEventListener('resize', resize);
 resize();
@@ -152,15 +154,18 @@ function updateModeUI() {
   setSailBtn.classList.toggle('hidden', mp);
 }
 
-// Player ship cards (practice keeps the classic sailing hulls)
-const playerRow = document.getElementById('player-cards')!;
-SAIL_TYPES.forEach((type) => {
+/** Card stat line for a hull (submarine gets its own blurb). */
+function shipStat(type: ShipTypeName): string {
   const s = SHIP_TYPES[type];
-  const card = makeCard(
-    type[0].toUpperCase() + type.slice(1),
-    `${s.guns} guns · ${SPEED_LABELS[type]} · ${s.maxHealth} hp`,
-    type,
-  );
+  return type === 'submarine'
+    ? `torpedo · dives · ${s.maxHealth} hp`
+    : `${s.guns} guns · ${SPEED_LABELS[type]} · ${s.maxHealth} hp`;
+}
+
+// Player ship cards — all hulls, submarine included.
+const playerRow = document.getElementById('player-cards')!;
+(Object.keys(SHIP_TYPES) as ShipTypeName[]).forEach((type) => {
+  const card = makeCard(type[0].toUpperCase() + type.slice(1), shipStat(type), type);
   card.addEventListener('click', () => {
     selectedPlayer = type;
     selectCard(playerRow, type);
@@ -169,15 +174,10 @@ SAIL_TYPES.forEach((type) => {
 });
 selectCard(playerRow, selectedPlayer);
 
-// Enemy ship cards (includes Random)
+// Enemy ship cards (includes Random; the enemy AI stays on sailing hulls)
 const enemyRow = document.getElementById('enemy-cards')!;
 SAIL_TYPES.forEach((type) => {
-  const s = SHIP_TYPES[type];
-  const card = makeCard(
-    type[0].toUpperCase() + type.slice(1),
-    `${s.guns} guns · ${SPEED_LABELS[type]} · ${s.maxHealth} hp`,
-    type,
-  );
+  const card = makeCard(type[0].toUpperCase() + type.slice(1), shipStat(type), type);
   card.addEventListener('click', () => {
     selectedEnemy = type;
     selectCard(enemyRow, type);
@@ -333,6 +333,7 @@ const lobbyShipRow = document.getElementById('lobby-ship-cards')!;
 const btnReady = document.getElementById('btn-ready') as HTMLButtonElement;
 const btnAddBot = document.getElementById('btn-addbot') as HTMLButtonElement;
 const btnFillBots = document.getElementById('btn-fillbots') as HTMLButtonElement;
+const btnMoreBots = document.getElementById('btn-morebots') as HTMLButtonElement;
 const btnStart = document.getElementById('btn-start') as HTMLButtonElement;
 const btnLeave = document.getElementById('btn-leave')!;
 
@@ -349,14 +350,8 @@ let myReady = false;
 let myShip: ShipTypeName = 'small';
 
 // Ship cards inside the lobby — each captain picks their own boat.
-// Multiplayer also offers the submarine (torpedoes, dives, engine-powered).
 (Object.keys(SHIP_TYPES) as ShipTypeName[]).forEach((type) => {
-  const s = SHIP_TYPES[type];
-  const stat =
-    type === 'submarine'
-      ? `torpedo · dives · ${s.maxHealth} hp`
-      : `${s.guns} guns · ${SPEED_LABELS[type]} · ${s.maxHealth} hp`;
-  const card = makeCard(type[0].toUpperCase() + type.slice(1), stat, type);
+  const card = makeCard(type[0].toUpperCase() + type.slice(1), shipStat(type), type);
   card.addEventListener('click', () => {
     myShip = type;
     selectCard(lobbyShipRow, type);
@@ -420,6 +415,8 @@ function renderLobby(players: LobbyPlayerInfo[], you: number, canStart: boolean)
   btnAddBot.disabled = players.length >= MAX_PLAYERS;
   btnFillBots.classList.toggle('hidden', !isHost);
   btnFillBots.disabled = players.length >= MAX_PLAYERS;
+  btnMoreBots.classList.toggle('hidden', !isHost);
+  btnMoreBots.disabled = players.length >= MAX_PLAYERS;
 
   const lobbyStatus = document.getElementById('lobby-status')!;
   if (players.length < 2) {
@@ -538,7 +535,8 @@ btnReady.addEventListener('click', () => {
 });
 
 btnAddBot.addEventListener('click', () => mp?.addBot());
-btnFillBots.addEventListener('click', () => mp?.fillBots());
+btnFillBots.addEventListener('click', () => mp?.fillBots(9)); // a quick 10-captain brawl
+btnMoreBots.addEventListener('click', () => mp?.fillBots(10)); // pile on, up to the 21 cap
 btnStart.addEventListener('click', () => mp?.startBattle());
 btnLeave.addEventListener('click', () => endMpSession());
 btnRematch.addEventListener('click', () => mp?.rematch());

@@ -566,13 +566,15 @@ canvas {
 }
 
 #btn-addbot,
-#btn-fillbots {
+#btn-fillbots,
+#btn-morebots {
   background: #3b5b8c;
   color: #fff;
 }
 
 #btn-addbot:disabled,
-#btn-fillbots:disabled {
+#btn-fillbots:disabled,
+#btn-morebots:disabled {
   opacity: 0.4;
   cursor: not-allowed;
 }

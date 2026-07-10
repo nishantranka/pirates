@@ -2,7 +2,7 @@ import { decideTurn, wantsToFire } from './ai';
 import { Cannonball } from './cannonball';
 import { Explosion } from './explosion';
 import type { Input } from './input';
-import { SAIL_TYPES, Ship, type ShipTypeName, type Turn } from './ship';
+import { DIVE, SAIL_TYPES, Ship, type ShipTypeName, type Turn } from './ship';
 import { Wind } from './wind';
 
 const MAX_DT = 0.05;
@@ -50,6 +50,7 @@ export class Game {
   private wind = new Wind();
   private lastTime = 0;
   private gameOverFired = false;
+  private diveCharge: number = DIVE.max; // player submarine dive charge
 
   /** Set by main.ts; called once when the battle ends (won = enemy sunk). */
   onGameOver: ((won: boolean) => void) | null = null;
@@ -129,6 +130,7 @@ export class Game {
     this.difficulty = difficulty;
     this.player = new Ship(w * 0.3, h * 0.6, -Math.PI / 4, PLAYER_COLOR, playerType);
     this.enemy = new Ship(w * 0.7, h * 0.3, Math.PI * 0.75, ENEMY_COLOR, resolvedEnemy);
+    this.diveCharge = DIVE.max;
     this.cannonballs = [];
     this.explosions = [];
     this.wind = new Wind();
@@ -210,21 +212,41 @@ export class Game {
     if (this.input.isDown('ArrowLeft') || this.input.isDown('KeyA')) turn = -1;
     if (this.input.isDown('ArrowRight') || this.input.isDown('KeyD')) turn = 1;
 
-    this.player.update(dt, turn, w, h, this.wind.speedFactor(this.player.heading));
+    // Player submarine: hold ↓/S to dive while the charge lasts (see DIVE).
+    if (this.player.type === 'submarine' && this.player.alive) {
+      const wantDive =
+        !this.over &&
+        (this.input.isDown('ArrowDown') || this.input.isDown('KeyS')) &&
+        this.diveCharge > 0;
+      this.player.depth = Math.max(
+        0,
+        Math.min(1, this.player.depth + ((wantDive ? 1 : -1) * dt) / DIVE.anim),
+      );
+      if (this.player.depth > 0.15 && wantDive) this.diveCharge = Math.max(0, this.diveCharge - dt);
+      else if (this.player.depth === 0)
+        this.diveCharge = Math.min(DIVE.max, this.diveCharge + DIVE.refill * dt);
+    }
+    const playerHidden = this.player.depth > DIVE.hidden;
+
+    // Submarines run on engines — the wind never touches them.
+    const psf = this.player.type === 'submarine' ? 1 : this.wind.speedFactor(this.player.heading);
+    this.player.update(dt, turn, w, h, psf);
     this.enemy.update(
       dt,
-      this.over ? 0 : decideTurn(this.enemy, this.player, aiOpts),
+      // The enemy captain can't see (or chase) a submerged player.
+      this.over || playerHidden ? 0 : decideTurn(this.enemy, this.player, aiOpts),
       w,
       h,
       this.wind.speedFactor(this.enemy.heading),
     );
 
     if (!this.over) {
-      if (this.input.isDown('Space') && this.player.reload <= 0) {
-        this.fireBroadside(this.player, this.enemy, PLAYER_RELOAD);
+      if (this.input.isDown('Space') && this.player.reload <= 0 && this.player.depth <= 0.15) {
+        if (this.player.type === 'submarine') this.fireTorpedo();
+        else this.fireBroadside(this.player, this.enemy, PLAYER_RELOAD);
         this.onCannonFire?.();
       }
-      if (wantsToFire(this.enemy, this.player, aiOpts) && this.enemy.reload <= 0) {
+      if (!playerHidden && wantsToFire(this.enemy, this.player, aiOpts) && this.enemy.reload <= 0) {
         this.fireBroadside(this.enemy, this.player, diff.reload);
       }
     }
@@ -232,6 +254,7 @@ export class Game {
     for (const ball of this.cannonballs) {
       ball.update(dt);
       const target = ball.owner === this.player ? this.enemy : this.player;
+      if (target === this.player && this.player.depth > DIVE.immune) continue; // passes over
       if (!ball.spent && target.alive && target.containsPoint(ball.x, ball.y)) {
         ball.spent = true;
         target.takeHit(ball.damage);
@@ -243,6 +266,21 @@ export class Game {
 
     for (const ex of this.explosions) ex.update(dt);
     this.explosions = this.explosions.filter((ex) => !ex.done);
+  }
+
+  /** Player submarine: a single straight-ahead bow torpedo. */
+  private fireTorpedo() {
+    const p = this.player;
+    this.cannonballs.push(
+      new Cannonball(
+        p.x + Math.cos(p.heading) * (p.length / 2 + 4),
+        p.y + Math.sin(p.heading) * (p.length / 2 + 4),
+        p.heading,
+        p,
+        true,
+      ),
+    );
+    p.reload = PLAYER_RELOAD;
   }
 
   private fireBroadside(shooter: Ship, target: Ship, reload: number) {
@@ -277,6 +315,16 @@ export class Game {
     for (const ball of this.cannonballs) ball.draw(ctx);
     this.player.draw(ctx);
     this.enemy.draw(ctx);
+
+    // Player submarine: cyan dive-charge bar under the hull.
+    if (this.player.type === 'submarine' && this.player.alive) {
+      const w2 = 40;
+      const y = this.player.y + this.player.length * 0.62;
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
+      ctx.fillRect(this.player.x - w2 / 2 - 1, y - 1, w2 + 2, 5);
+      ctx.fillStyle = '#4fd8ef';
+      ctx.fillRect(this.player.x - w2 / 2, y, (w2 * this.diveCharge) / DIVE.max, 3);
+    }
     for (const ex of this.explosions) ex.draw(ctx);
 
     this.drawHealthRow(`You (${this.player.type})`, this.player, 0);
@@ -415,7 +463,11 @@ export class Game {
     ctx.fillStyle = '#fff';
     ctx.fillText('Wind', cx, cy + r + 14);
     ctx.fillStyle = 'rgba(255, 255, 255, 0.8)';
-    const pct = Math.round(this.wind.speedFactor(this.player.heading) * 100);
-    ctx.fillText(`Sails ${pct}%`, cx, cy + r + 32);
+    if (this.player.type === 'submarine') {
+      ctx.fillText('Engine', cx, cy + r + 32); // subs ignore the wind
+    } else {
+      const pct = Math.round(this.wind.speedFactor(this.player.heading) * 100);
+      ctx.fillText(`Sails ${pct}%`, cx, cy + r + 32);
+    }
   }
 }

@@ -56,7 +56,8 @@ battle once 2–11 captains are in. Solo? Hit **Fill with Bots** for an instant
   broadcasts 30 Hz snapshots; guests send steering/fire inputs and render with
   smoothing. Rooms are matched through the free public PeerJS broker, then all
   game traffic flows peer-to-peer.
-- **Submarine** — a fourth multiplayer boat: engine-powered (wind never touches
+- **Submarine** — a fourth boat, playable in practice and multiplayer:
+  engine-powered (wind never touches
   it) and armed with a single **bow torpedo** — faster, longer-ranged, and
   harder-hitting than a cannonball. Hold **↓/S to dive**: while submerged
   you're invisible and immune to shots and rams, but you can't fire or grab
@@ -67,9 +68,10 @@ battle once 2–11 captains are in. Solo? Hit **Fill with Bots** for an instant
   leave none while under), and a bobbing red triangle marks your own ship.
 - **How to play** — the ❓ button (top-left) opens a full rules reference:
   wind, combat, islands, ramming, power-ups, submarine, maelstrom, scoring.
-- **Bots** — no friends online? The host can fill empty slots with AI captains
-  (**Add Bot 🤖** one at a time, or **Fill with Bots** for a full 20-bot
-  lobby, 21 captains total). Bots hunt the most promising target
+- **Bots** — no friends online? The host can fill empty slots with AI captains:
+  **Add Bot 🤖** one at a time, **Fill with Bots** for an instant 10-captain
+  brawl, then **+10 Bots** to pile on up to 21 captains total. Bots hunt the
+  most promising target
   (close and already damaged), lead their shots with the wind, hold fire when
   an island blocks the shot, and when wounded they break off and run for
   cover, favoring fast points of sail and keeping islands between themselves

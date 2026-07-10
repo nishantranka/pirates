@@ -23,8 +23,17 @@ export const SHIP_TYPES = {
 
 export type ShipTypeName = keyof typeof SHIP_TYPES;
 
-/** The classic sailing hulls — what single-player and bots choose from. */
+/** The classic sailing hulls — what enemy AI and bots choose from. */
 export const SAIL_TYPES: ShipTypeName[] = ['small', 'medium', 'large'];
+
+/** Submarine dive tuning, shared by practice (game.ts) and multiplayer. */
+export const DIVE = {
+  max: 6, // s of submersion charge
+  refill: 0.55, // charge regained per second while surfaced
+  anim: 1.0, // s to fully submerge or surface
+  immune: 0.6, // depth beyond which shots/rams pass over
+  hidden: 0.5, // depth beyond which enemies can't see you
+} as const;
 
 const SINK_DURATION = 1.5; // s to fade out after health hits 0
 

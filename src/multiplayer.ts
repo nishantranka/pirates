@@ -32,7 +32,7 @@ import {
   type ShipSpawn,
   type ShipState,
 } from './net';
-import { SAIL_TYPES, Ship, SHIP_TYPES, type ShipTypeName, type Turn } from './ship';
+import { DIVE, SAIL_TYPES, Ship, SHIP_TYPES, type ShipTypeName, type Turn } from './ship';
 import { Wind } from './wind';
 import type { DataConnection } from 'peerjs';
 
@@ -57,12 +57,13 @@ const SCORE_DAMAGE = 1; // per point of hull damage dealt
 const SCORE_KILL = 8; // per enemy sunk
 
 // Submarine diving: hold ↓/S. While submerged you're invisible & untouchable,
-// but you can't fire or grab pickups — and the charge meter limits your time under.
-const DIVE_MAX = 6; // s of submersion charge
-const DIVE_REFILL = 0.55; // charge regained per second while surfaced
-const DIVE_ANIM = 1.0; // s to fully submerge or surface
-const SUB_IMMUNE = 0.6; // depth beyond which shots/rams pass over
-const SUB_HIDDEN = 0.5; // depth beyond which enemies can't see you
+// but you can't fire or grab pickups — and the charge meter limits your time
+// under. Tuning is shared with practice mode via DIVE in ship.ts.
+const DIVE_MAX = DIVE.max;
+const DIVE_REFILL = DIVE.refill;
+const DIVE_ANIM = DIVE.anim;
+const SUB_IMMUNE = DIVE.immune;
+const SUB_HIDDEN = DIVE.hidden;
 const MG_RELOAD_SUB = 0.35; // rapid-fire cadence for torpedoes
 
 // Ramming (bow-spike model): damage scales with speed, how bow-on the hit is,
@@ -468,10 +469,14 @@ export class MpSession {
     this.pushLobby();
   }
 
-  /** Host only: fill every empty slot with AI captains. */
-  fillBots() {
+  /** Host only: add up to `count` AI captains (bounded by room capacity). */
+  fillBots(count = MAX_PLAYERS) {
     if (!this.isHost || this.phase !== 'lobby') return;
-    for (let bot = this.makeBot(); bot; bot = this.makeBot()) this.players.push(bot);
+    for (let n = 0; n < count; n++) {
+      const bot = this.makeBot();
+      if (!bot) break;
+      this.players.push(bot);
+    }
     this.pushLobby();
   }
 
