@@ -45,6 +45,10 @@ battle once 2–11 captains are in. Solo? Hit **Fill with Bots** for an instant
 - **Fair start** — everyone spawns scattered in random directions inside a
   golden **2-second shield bubble** (fully invulnerable), so you get a moment
   to orient before anyone can be hit.
+- **Shrinking storm** — after a short calm the arena starts closing in: a
+  centered safe zone shrinks over time and anyone caught in the red storm takes
+  steady damage, herding the survivors together so rounds can't drag on. As
+  captains are eliminated, **fewer bounties spawn**, tightening the endgame.
 - **Host-authoritative netcode** — the room creator simulates the battle and
   broadcasts 30 Hz snapshots; guests send steering/fire inputs and render with
   smoothing. Rooms are matched through the free public PeerJS broker, then all

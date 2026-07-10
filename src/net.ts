@@ -87,6 +87,7 @@ export type H2CMsg =
       wind: number;
       events: GameEvent[];
       pickups: PickupState[];
+      storm: number; // safe-zone fraction of the arena (1 = full, shrinks over time)
     }
   | { t: 'end'; winner: number }
   | { t: 'toLobby' };

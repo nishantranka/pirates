@@ -70,6 +70,13 @@ const PICKUP_R = 15; // px
 const PICKUP_TTL = 20; // s before an uncollected pickup relocates
 const SPAWN_PROTECT = 2; // s of spawn invulnerability while ships scatter
 
+// Shrinking storm: a safe zone that closes in over time, forcing captains
+// together so a big free-for-all can't drag on.
+const STORM_START = 18; // s of calm before the storm begins closing
+const STORM_SHRINK_TIME = 60; // s to shrink from full arena to the minimum
+const STORM_MIN_FRAC = 0.3; // safe zone bottoms out at 30% of the arena
+const STORM_DPS = 1.5; // hull damage per second while caught outside the zone
+
 // Spawn cadence per type (min, max seconds). Health is common; the rest rarer.
 const PICKUP_SPAWN: Record<PickupType, [number, number]> = {
   health: [6, 10],
@@ -293,6 +300,7 @@ export class MpSession {
   private scoreView: { score: number; kills: number }[] = []; // host + guest (leaderboard)
   private ramCd: number[] = []; // per-ship ram-damage cooldown (host)
   private spawnUntil: number[] = []; // per-ship spawn-invulnerability expiry (host)
+  private stormFrac = 1; // safe-zone fraction (host computes, guest mirrors)
   private wind = new Wind();
   private explosions: Explosion[] = [];
   private splashes: Splash[] = [];
@@ -610,6 +618,7 @@ export class MpSession {
     this.scoreView = this.spawns.map(() => ({ score: 0, kills: 0 }));
     this.ramCd = this.spawns.map(() => 0);
     this.spawnUntil = this.spawns.map(() => SPAWN_PROTECT); // clock starts at 0
+    this.stormFrac = 1;
     this.pickupTimers = { ...ZERO_TIMERS };
     for (const type of PICKUP_ORDER) {
       const [lo, hi] = PICKUP_SPAWN[type];
@@ -670,6 +679,7 @@ export class MpSession {
     });
 
     if (this.phase === 'battle') this.updateRams(dt);
+    if (this.phase === 'battle') this.updateStorm(dt);
     if (this.phase === 'battle') this.updatePickups(dt);
 
     if (this.phase === 'battle') {
@@ -904,6 +914,36 @@ export class MpSession {
     return true;
   }
 
+  // ── Storm (host) ────────────────────────────────────────────────────────────
+
+  /** Centered safe rectangle for the current storm fraction. */
+  private safeRect(frac = this.stormFrac) {
+    const w = WORLD_W * frac;
+    const h = WORLD_H * frac;
+    const x0 = (WORLD_W - w) / 2;
+    const y0 = (WORLD_H - h) / 2;
+    return { x0, y0, x1: x0 + w, y1: y0 + h };
+  }
+
+  private updateStorm(dt: number) {
+    if (this.clock < STORM_START) {
+      this.stormFrac = 1;
+      return;
+    }
+    const t = Math.min((this.clock - STORM_START) / STORM_SHRINK_TIME, 1);
+    this.stormFrac = 1 - (1 - STORM_MIN_FRAC) * t;
+
+    const { x0, y0, x1, y1 } = this.safeRect();
+    this.ships.forEach((s, i) => {
+      if (!s.alive || this.spawnUntil[i] > this.clock) return;
+      if (s.x < x0 || s.x > x1 || s.y < y0 || s.y > y1) {
+        const before = s.health;
+        s.takeHit(STORM_DPS * dt); // the storm ignores shields — get to the eye
+        if (before > 0 && s.health <= 0) this.pendingEvents.push({ e: 'hit', x: s.x, y: s.y });
+      }
+    });
+  }
+
   // ── Power-ups (host) ────────────────────────────────────────────────────────
 
   private updatePickups(dt: number) {
@@ -911,13 +951,18 @@ export class MpSession {
     for (const p of this.pickups) p.ttl -= dt;
     this.pickups = this.pickups.filter((p) => p.ttl > 0);
 
+    // Fewer captains afloat → fewer bounties, so goodies thin out as the fight
+    // narrows down to the survivors.
+    const alive = this.ships.reduce((n, s) => n + (s.alive ? 1 : 0), 0);
+    const maxActive = Math.max(1, Math.round((MAX_PICKUPS * alive) / this.ships.length));
+
     // Timed spawns per type.
     for (const type of PICKUP_ORDER) {
       this.pickupTimers[type] -= dt;
       if (this.pickupTimers[type] > 0) continue;
       const [lo, hi] = PICKUP_SPAWN[type];
       this.pickupTimers[type] = lo + Math.random() * (hi - lo);
-      if (this.pickups.length >= MAX_PICKUPS) continue;
+      if (this.pickups.length >= maxActive) continue;
       const spot = this.pickDifficultSpot();
       if (spot) this.pickups.push({ id: this.pickupId++, type, x: spot.x, y: spot.y, ttl: PICKUP_TTL });
     }
@@ -1042,6 +1087,7 @@ export class MpSession {
       wind: this.wind.direction,
       events: this.pendingEvents,
       pickups: this.pickups.map((p) => ({ t: p.type, x: p.x, y: p.y })),
+      storm: this.stormFrac,
     };
     this.pendingEvents = [];
     this.broadcast(msg);
@@ -1087,6 +1133,7 @@ export class MpSession {
         }));
         this.buffView = msg.ships.map(() => ({ shield: 0, spd: false, dbl: false, mg: false, inv: true }));
         this.scoreView = msg.ships.map(() => ({ score: 0, kills: 0 }));
+        this.stormFrac = 1;
         this.pickups = [];
         this.balls = [];
         this.ballStates = [];
@@ -1103,6 +1150,7 @@ export class MpSession {
         this.targets = msg.ships;
         this.ballStates = msg.balls;
         this.pickups = msg.pickups.map((p) => ({ id: 0, type: p.t, x: p.x, y: p.y, ttl: 1 }));
+        this.stormFrac = msg.storm;
         this.lastSnapAt = performance.now();
         this.wind.direction = msg.wind;
         this.applyEvents(msg.events);
@@ -1282,6 +1330,8 @@ export class MpSession {
     for (const ex of this.explosions) ex.draw(ctx);
     for (const sp of this.splashes) sp.draw(ctx);
 
+    this.drawStorm();
+
     ctx.restore();
 
     // World border so the wrap edge is visible.
@@ -1290,6 +1340,26 @@ export class MpSession {
     ctx.strokeRect(ox, oy, WORLD_W * scale, WORLD_H * scale);
 
     this.drawHud();
+  }
+
+  /** The encroaching storm: a red danger wash outside the safe zone. */
+  private drawStorm() {
+    if (this.stormFrac >= 1) return;
+    const ctx = this.ctx;
+    const { x0, y0, x1, y1 } = this.safeRect();
+    const pulse = 0.24 + 0.07 * Math.sin(performance.now() / 400);
+
+    ctx.save();
+    ctx.fillStyle = `rgba(150, 22, 66, ${pulse})`;
+    ctx.fillRect(0, 0, WORLD_W, y0); // top
+    ctx.fillRect(0, y1, WORLD_W, WORLD_H - y1); // bottom
+    ctx.fillRect(0, y0, x0, y1 - y0); // left
+    ctx.fillRect(x1, y0, WORLD_W - x1, y1 - y0); // right
+
+    ctx.strokeStyle = 'rgba(255, 95, 125, 0.95)';
+    ctx.lineWidth = 3;
+    ctx.strokeRect(x0, y0, x1 - x0, y1 - y0);
+    ctx.restore();
   }
 
   private drawPickups() {
@@ -1447,8 +1517,25 @@ export class MpSession {
 
   private drawHud() {
     // Per-ship health lives on the hulls now; standings live in the HTML
-    // leaderboard panel. The canvas HUD only shows the wind compass.
+    // leaderboard panel. The canvas HUD shows the wind compass and, once the
+    // storm is closing, a warning banner.
     this.drawWindIndicator();
+
+    if (this.stormFrac < 1) {
+      const ctx = this.ctx;
+      ctx.save();
+      ctx.font = 'bold 15px system-ui, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'top';
+      const text = '⚠ STORM CLOSING — GET TO THE EYE';
+      const x = ctx.canvas.width / 2;
+      ctx.lineWidth = 3;
+      ctx.strokeStyle = 'rgba(0, 0, 0, 0.6)';
+      ctx.strokeText(text, x, 14);
+      ctx.fillStyle = '#ff9db3';
+      ctx.fillText(text, x, 14);
+      ctx.restore();
+    }
   }
 
   private drawWindIndicator() {
