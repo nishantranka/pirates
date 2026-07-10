@@ -5,12 +5,21 @@ import { CODE_LENGTH, type LobbyPlayerInfo } from './net';
 import { SHIP_TYPES, type ShipTypeName } from './ship';
 import './style.css';
 
+// Sound on/off, remembered across sessions.
+let muted = false;
+try {
+  muted = localStorage.getItem('pirates-muted') === '1';
+} catch {
+  /* localStorage may be unavailable (e.g. private mode) */
+}
+
 // Preload a sound and return a function that plays a fresh clone each call
 // (cloning lets multiple instances overlap, e.g. several explosions at once).
 function makeSound(url: string): () => void {
   const audio = new Audio(url);
   audio.preload = 'auto';
   return () => {
+    if (muted) return;
     const clone = audio.cloneNode() as HTMLAudioElement;
     clone.play().catch(() => {});
   };
@@ -577,3 +586,25 @@ function updateLeaderboard() {
 
 // Refresh a few times a second — cheap, and the standings don't need 60 fps.
 setInterval(updateLeaderboard, 400);
+
+// ── Mute toggle ───────────────────────────────────────────────────────────────
+
+const muteBtn = document.getElementById('mute-toggle')!;
+function updateMuteBtn() {
+  muteBtn.textContent = muted ? '🔇' : '🔊';
+  muteBtn.title = muted ? 'Unmute (M)' : 'Mute (M)';
+}
+function toggleMute() {
+  muted = !muted;
+  try {
+    localStorage.setItem('pirates-muted', muted ? '1' : '0');
+  } catch {
+    /* ignore */
+  }
+  updateMuteBtn();
+}
+muteBtn.addEventListener('click', toggleMute);
+window.addEventListener('keydown', (e) => {
+  if (e.code === 'KeyM' && !(e.target instanceof HTMLInputElement)) toggleMute();
+});
+updateMuteBtn();

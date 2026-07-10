@@ -1575,7 +1575,7 @@ export class MpSession {
   private drawWindIndicator() {
     const ctx = this.ctx;
     const cx = 52;
-    const cy = 52;
+    const cy = 100; // below the mute button in the top-left corner
     const r = 28;
 
     ctx.fillStyle = 'rgba(0, 0, 0, 0.3)';
