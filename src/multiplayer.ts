@@ -32,7 +32,7 @@ import {
   type ShipSpawn,
   type ShipState,
 } from './net';
-import { DIVE, SAIL_TYPES, Ship, SHIP_TYPES, type ShipTypeName, type Turn } from './ship';
+import { DIVE, SAIL_TYPES, Ship, SHIP_TYPES, YOU_COLOR, type ShipTypeName, type Turn } from './ship';
 import { Wind } from './wind';
 import type { DataConnection } from 'peerjs';
 
@@ -79,6 +79,7 @@ const MAX_PICKUPS = 9;
 const PICKUP_R = 15; // px
 const PICKUP_TTL = 20; // s before an uncollected pickup relocates
 const SPAWN_PROTECT = 2; // s of spawn invulnerability while ships scatter
+const START_FREEZE = 3; // s everyone holds still at round start to find their ship
 
 // Whirlpool (maelstrom): a growing vortex at the arena center that drags every
 // ship inward and shreds anyone caught outside its shrinking eye. Radial, so it
@@ -338,6 +339,7 @@ export class MpSession {
   private diveCharge: number[] = []; // per-ship submarine dive charge (host)
   private guestCharge: number[] = []; // dive charge fractions mirrored from snapshots (guest)
   private eyeR = EYE_MAX; // whirlpool eye radius (host computes, guest mirrors)
+  private freeze = 0; // start-of-round locate-your-ship pause (host computes, guest mirrors)
   private wind = new Wind();
   private explosions: Explosion[] = [];
   private splashes: Splash[] = [];
@@ -638,6 +640,8 @@ export class MpSession {
     });
     this.islands = generateIslands(WORLD_W, WORLD_H, SPAWNS.slice(0, this.players.length));
     this.ships = this.spawns.map((sp) => new Ship(sp.x, sp.y, sp.heading, sp.color, sp.type));
+    this.ships[0].hullColor = YOU_COLOR; // your own hull is always pink (host is idx 0)
+    this.freeze = START_FREEZE;
     this.balls = [];
     this.explosions = [];
     this.splashes = [];
@@ -687,6 +691,20 @@ export class MpSession {
   }
 
   private hostUpdate(dt: number) {
+    // Start-of-round pause: the world holds still (clock frozen, no inputs, no
+    // shots) while every captain locates their pink ship.
+    if (this.phase === 'battle' && this.freeze > 0) {
+      this.freeze = Math.max(0, this.freeze - dt);
+      this.updateBuffView();
+      this.snapshotAcc += dt;
+      if (this.snapshotAcc >= SNAPSHOT_INTERVAL) {
+        this.snapshotAcc = 0;
+        this.sendSnapshot();
+      }
+      this.tickEffects(dt);
+      return;
+    }
+
     this.clock += dt;
     this.wind.update(dt);
     this.driftWaves(dt);
@@ -1189,6 +1207,7 @@ export class MpSession {
       events: this.pendingEvents,
       pickups: this.pickups.map((p) => ({ t: p.type, x: p.x, y: p.y })),
       eye: this.eyeR,
+      freeze: this.freeze,
     };
     this.pendingEvents = [];
     this.broadcast(msg);
@@ -1218,6 +1237,8 @@ export class MpSession {
         this.spawns = msg.ships;
         this.you = msg.you;
         this.ships = msg.ships.map((sp) => new Ship(sp.x, sp.y, sp.heading, sp.color, sp.type));
+        this.ships[this.you].hullColor = YOU_COLOR; // your own hull is always pink
+        this.freeze = START_FREEZE;
         this.targets = msg.ships.map((sp) => ({
           x: sp.x,
           y: sp.y,
@@ -1255,6 +1276,7 @@ export class MpSession {
         this.ballStates = msg.balls;
         this.pickups = msg.pickups.map((p) => ({ id: 0, type: p.t, x: p.x, y: p.y, ttl: 1 }));
         this.eyeR = msg.eye;
+        this.freeze = msg.freeze;
         this.lastSnapAt = performance.now();
         this.wind.direction = msg.wind;
         this.applyEvents(msg.events);
@@ -1385,10 +1407,24 @@ export class MpSession {
 
   // ── Rendering ───────────────────────────────────────────────────────────────
 
+  // Canvas backing store is device pixels (high-DPI); logic works in CSS px.
+  private get dpr(): number {
+    return Math.min(window.devicePixelRatio || 1, 2);
+  }
+
+  private get viewW(): number {
+    return this.ctx.canvas.width / this.dpr;
+  }
+
+  private get viewH(): number {
+    return this.ctx.canvas.height / this.dpr;
+  }
+
   private render() {
     const ctx = this.ctx;
-    const cw = ctx.canvas.width;
-    const ch = ctx.canvas.height;
+    ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0); // pixel-sharp on scaled displays
+    const cw = this.viewW;
+    const ch = this.viewH;
     const scale = Math.min(cw / WORLD_W, ch / WORLD_H);
     const ox = (cw - WORLD_W * scale) / 2;
     const oy = (ch - WORLD_H * scale) / 2;
@@ -1440,7 +1476,7 @@ export class MpSession {
       // A submerged submarine is invisible to everyone but its own captain.
       if (i !== this.you && ship.depth > SUB_HIDDEN) return;
       if (ship.sinkProgress < 1) this.drawShipBuffs(ship, i); // aura under the hull
-      ship.draw(ctx);
+      ship.drawWrapped(ctx, WORLD_W, WORLD_H); // ghost across edges = seamless wrap
       if (ship.sinkProgress < 1) {
         this.drawShipHealth(ship);
         this.drawBuffIcons(ship, i);
@@ -1735,12 +1771,36 @@ export class MpSession {
       ctx.textAlign = 'center';
       ctx.textBaseline = 'top';
       const text = '🌀 MAELSTROM — THE SEA IS PULLING IN';
-      const x = ctx.canvas.width / 2;
+      const x = this.viewW / 2;
       ctx.lineWidth = 3;
       ctx.strokeStyle = 'rgba(0, 0, 0, 0.6)';
       ctx.strokeText(text, x, 14);
       ctx.fillStyle = '#ff9db3';
       ctx.fillText(text, x, 14);
+      ctx.restore();
+    }
+
+    // Start-of-round countdown: give everyone a beat to find their pink ship.
+    if (this.phase === 'battle' && this.freeze > 0) {
+      const ctx = this.ctx;
+      const x = this.viewW / 2;
+      const y = this.viewH * 0.3;
+      ctx.save();
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+
+      ctx.font = 'bold 30px system-ui, sans-serif';
+      ctx.lineWidth = 5;
+      ctx.strokeStyle = 'rgba(0, 0, 0, 0.65)';
+      ctx.strokeText('Find your PINK ship!', x, y);
+      ctx.fillStyle = '#ff9dc7';
+      ctx.fillText('Find your PINK ship!', x, y);
+
+      ctx.font = 'bold 64px system-ui, sans-serif';
+      const n = String(Math.ceil(this.freeze));
+      ctx.strokeText(n, x, y + 62);
+      ctx.fillStyle = '#ffffff';
+      ctx.fillText(n, x, y + 62);
       ctx.restore();
     }
   }

@@ -65,7 +65,9 @@ battle once 2–11 captains are in. Solo? Hit **Fill with Bots** for an instant
   surface). Islands still sink you; the maelstrom still pulls you. Power-ups
   adapt: Double gives a torpedo spread, Rapid Fire a torpedo stream.
 - **Wakes & you-marker** — every ship leaves a fading wake as it sails (subs
-  leave none while under), and a bobbing red triangle marks your own ship.
+  leave none while under). **Your own ship is always pink**, marked with a
+  bobbing red triangle, and every round opens with a 3-second "find your ship"
+  pause before anyone can move or fire.
 - **How to play** — the ❓ button (top-left) opens a full rules reference:
   wind, combat, islands, ramming, power-ups, submarine, maelstrom, scoring.
 - **Bots** — no friends online? The host can fill empty slots with AI captains:

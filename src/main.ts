@@ -34,9 +34,14 @@ const canvas = document.getElementById('game') as HTMLCanvasElement;
 const ctx = canvas.getContext('2d')!;
 
 function resize() {
-  canvas.width = window.innerWidth;
-  canvas.height = window.innerHeight;
-  game.onResize(canvas.width, canvas.height);
+  // Render at native resolution (high-DPI aware) so the game is pixel-sharp on
+  // scaled displays; capped at 2× to keep fill costs sane. Logic stays in CSS px.
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  canvas.width = Math.round(window.innerWidth * dpr);
+  canvas.height = Math.round(window.innerHeight * dpr);
+  canvas.style.width = `${window.innerWidth}px`;
+  canvas.style.height = `${window.innerHeight}px`;
+  game.onResize(window.innerWidth, window.innerHeight);
 }
 
 // ── Game instance ─────────────────────────────────────────────────────────────

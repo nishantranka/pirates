@@ -91,6 +91,7 @@ export type H2CMsg =
       events: GameEvent[];
       pickups: PickupState[];
       eye: number; // whirlpool eye radius in px (shrinks over time; large = no maelstrom yet)
+      freeze: number; // start-of-round locate-your-ship pause remaining, s
     }
   | { t: 'end'; winner: number }
   | { t: 'toLobby' };

@@ -26,6 +26,9 @@ export type ShipTypeName = keyof typeof SHIP_TYPES;
 /** The classic sailing hulls — what enemy AI and bots choose from. */
 export const SAIL_TYPES: ShipTypeName[] = ['small', 'medium', 'large'];
 
+/** Your own hull is always this pink, so you can spot yourself instantly. */
+export const YOU_COLOR = '#ff4fa0';
+
 /** Submarine dive tuning, shared by practice (game.ts) and multiplayer. */
 export const DIVE = {
   max: 6, // s of submersion charge
@@ -58,7 +61,7 @@ export class Ship {
   readonly length: number;
   readonly width: number;
 
-  private hullColor: string;
+  hullColor: string; // public so the local client can repaint its own ship pink
 
   constructor(x: number, y: number, heading: number, hullColor: string, type: ShipTypeName) {
     const stats = SHIP_TYPES[type];
@@ -114,6 +117,33 @@ export class Ship {
     const localX = dx * cos - dy * sin;
     const localY = dx * sin + dy * cos;
     return Math.abs(localX) <= this.length / 2 && Math.abs(localY) <= this.width / 2;
+  }
+
+  /**
+   * Draw the hull plus ghost copies across wrapped edges, so crossing the
+   * world boundary looks continuous — the bow emerges on the far side the
+   * moment the stern starts leaving this one.
+   */
+  drawWrapped(ctx: CanvasRenderingContext2D, worldW: number, worldH: number) {
+    const m = this.length; // matches the wrap margin in update()
+    const xs = [0];
+    if (this.x < m) xs.push(worldW);
+    if (this.x > worldW - m) xs.push(-worldW);
+    const ys = [0];
+    if (this.y < m) ys.push(worldH);
+    if (this.y > worldH - m) ys.push(-worldH);
+    for (const dx of xs) {
+      for (const dy of ys) {
+        if (dx === 0 && dy === 0) {
+          this.draw(ctx);
+        } else {
+          ctx.save();
+          ctx.translate(dx, dy);
+          this.draw(ctx);
+          ctx.restore();
+        }
+      }
+    }
   }
 
   draw(ctx: CanvasRenderingContext2D) {

@@ -2,7 +2,7 @@ import { decideTurn, wantsToFire } from './ai';
 import { Cannonball } from './cannonball';
 import { Explosion } from './explosion';
 import type { Input } from './input';
-import { DIVE, SAIL_TYPES, Ship, type ShipTypeName, type Turn } from './ship';
+import { DIVE, SAIL_TYPES, Ship, YOU_COLOR, type ShipTypeName, type Turn } from './ship';
 import { Wind } from './wind';
 
 const MAX_DT = 0.05;
@@ -17,7 +17,7 @@ export const DIFFICULTIES = {
 
 export type DifficultyName = keyof typeof DIFFICULTIES;
 
-const PLAYER_COLOR = '#8b5a2b';
+const PLAYER_COLOR = YOU_COLOR; // your ship is always pink — easy to spot
 const ENEMY_COLOR = '#7a1f1f';
 
 // Touch button dimensions — large enough for thumbs.
@@ -72,7 +72,8 @@ export class Game {
     this.ctx = ctx;
     this.input = input;
 
-    const { width: w, height: h } = ctx.canvas;
+    const w = this.viewW;
+    const h = this.viewH;
     this.updateBtnRects(w, h);
 
     for (let i = 0; i < 40; i++) {
@@ -105,8 +106,8 @@ export class Game {
   private onTouch = (e: TouchEvent) => {
     if (this.phase !== 'battle') return;
     const rect = this.ctx.canvas.getBoundingClientRect();
-    const scaleX = this.ctx.canvas.width / rect.width;
-    const scaleY = this.ctx.canvas.height / rect.height;
+    const scaleX = this.viewW / rect.width;
+    const scaleY = this.viewH / rect.height;
     let left = false;
     let right = false;
     let fire = false;
@@ -121,7 +122,8 @@ export class Game {
   };
 
   startBattle(playerType: ShipTypeName, enemyType: ShipTypeName | 'random', difficulty: DifficultyName) {
-    const { width: w, height: h } = this.ctx.canvas;
+    const w = this.viewW;
+    const h = this.viewH;
     let resolvedEnemy = enemyType;
     if (resolvedEnemy === 'random') {
       resolvedEnemy = SAIL_TYPES[Math.floor(Math.random() * SAIL_TYPES.length)];
@@ -141,7 +143,8 @@ export class Game {
 
   /** Survivor mode: replace the enemy with a new ship without resetting the player. */
   spawnNextEnemy(type: ShipTypeName, difficulty: DifficultyName) {
-    const { width: w, height: h } = this.ctx.canvas;
+    const w = this.viewW;
+    const h = this.viewH;
     let ex: number, ey: number;
     let attempts = 0;
     do {
@@ -161,6 +164,19 @@ export class Game {
 
   private get over(): boolean {
     return this.phase === 'battle' && (!this.player.alive || !this.enemy.alive);
+  }
+
+  // Canvas backing store is device pixels (high-DPI); logic works in CSS px.
+  private get dpr(): number {
+    return Math.min(window.devicePixelRatio || 1, 2);
+  }
+
+  private get viewW(): number {
+    return this.ctx.canvas.width / this.dpr;
+  }
+
+  private get viewH(): number {
+    return this.ctx.canvas.height / this.dpr;
   }
 
   start() {
@@ -190,7 +206,8 @@ export class Game {
   private update(dt: number) {
     if (this.phase === 'idle') return;
 
-    const { width: w, height: h } = this.ctx.canvas;
+    const w = this.viewW;
+    const h = this.viewH;
 
     if (this.over && !this.gameOverFired) {
       this.gameOverFired = true;
@@ -308,13 +325,15 @@ export class Game {
   }
 
   private render() {
+    // High-DPI: draw in CSS pixels on a device-pixel backing store.
+    this.ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
     this.drawSea();
     if (this.phase === 'idle') return;
 
     const ctx = this.ctx;
     for (const ball of this.cannonballs) ball.draw(ctx);
-    this.player.draw(ctx);
-    this.enemy.draw(ctx);
+    this.player.drawWrapped(ctx, this.viewW, this.viewH);
+    this.enemy.drawWrapped(ctx, this.viewW, this.viewH);
 
     // Player submarine: cyan dive-charge bar under the hull.
     if (this.player.type === 'submarine' && this.player.alive) {
@@ -341,7 +360,8 @@ export class Game {
 
   private drawSea() {
     const ctx = this.ctx;
-    const { width: w, height: h } = ctx.canvas;
+    const w = this.viewW;
+    const h = this.viewH;
 
     ctx.fillStyle = '#2e6da6';
     ctx.fillRect(0, 0, w, h);
@@ -389,7 +409,7 @@ export class Game {
 
     const y = margin + row * (segH + 12);
     const totalW = ship.maxHealth * (segW + gap) - gap;
-    const x0 = ctx.canvas.width - margin - totalW;
+    const x0 = this.viewW - margin - totalW;
 
     ctx.font = '13px system-ui, sans-serif';
     ctx.textAlign = 'right';
@@ -420,7 +440,7 @@ export class Game {
     ctx.textAlign = 'right';
     ctx.textBaseline = 'middle';
     ctx.fillStyle = '#ffd75e';
-    ctx.fillText(`⚓ ${this.survivorKills} sunk`, ctx.canvas.width - margin, y);
+    ctx.fillText(`⚓ ${this.survivorKills} sunk`, this.viewW - margin, y);
   }
 
   private drawWindIndicator() {
