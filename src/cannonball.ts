@@ -1,6 +1,6 @@
 import type { Ship } from './ship';
 
-export const CANNONBALL_SPEED = 260; // px/s
+export const CANNONBALL_SPEED = 390; // px/s (1.5× base, matching the faster ships)
 const MAX_RANGE = 320; // px before the ball splashes into the sea
 
 export class Cannonball {

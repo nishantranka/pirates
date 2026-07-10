@@ -10,10 +10,12 @@ export interface ShipStats {
 }
 
 // Small ships are fast but fragile; large ships are slow but tough.
+// Speed and turn rate are 1.5× the base tuning for a brisker pace (handling
+// ratio is preserved since both scale together).
 export const SHIP_TYPES = {
-  small: { speed: 110, turnRate: 1.6, maxHealth: 3, guns: 2, length: 42, width: 17 },
-  medium: { speed: 80, turnRate: 1.2, maxHealth: 5, guns: 3, length: 56, width: 22 },
-  large: { speed: 55, turnRate: 0.9, maxHealth: 8, guns: 4, length: 72, width: 28 },
+  small: { speed: 165, turnRate: 2.4, maxHealth: 3, guns: 2, length: 42, width: 17 },
+  medium: { speed: 120, turnRate: 1.8, maxHealth: 5, guns: 3, length: 56, width: 22 },
+  large: { speed: 82.5, turnRate: 1.35, maxHealth: 8, guns: 4, length: 72, width: 28 },
 } as const satisfies Record<string, ShipStats>;
 
 export type ShipTypeName = keyof typeof SHIP_TYPES;

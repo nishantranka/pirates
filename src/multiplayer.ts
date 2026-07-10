@@ -78,9 +78,9 @@ const WHIRL_START = 15; // s of calm before the maelstrom forms
 const WHIRL_RAMP = 55; // s to reach full strength
 const EYE_MAX = 720; // eye radius before the whirlpool forms (covers most of the arena)
 const EYE_MIN = 150; // fully-formed eye radius
-// Pull > the fastest hull (110 px/s) at full strength, so even a ship sailing
+// Pull > the fastest hull (165 px/s) at full strength, so even a ship sailing
 // straight out gets dragged inward — the current alone converges the fight.
-const PULL_MAX = 125; // px/s inward current at full strength (outside the eye)
+const PULL_MAX = 188; // px/s inward current at full strength (outside the eye)
 const SWIRL_FRAC = 0.5; // tangential swirl as a fraction of the inward pull
 
 // Spawn cadence per type (min, max seconds). Health is common; the rest rarer.
