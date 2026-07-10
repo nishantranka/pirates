@@ -47,10 +47,11 @@ battle once 2–11 captains are in. Solo? Hit **Fill with Bots** for an instant
   to orient before anyone can be hit.
 - **Maelstrom** — after a short calm a whirlpool forms at the center and ramps
   up: an inward **current tows every ship toward the middle** (with a swirling
-  drift), and a circular calm **eye shrinks over time** — anyone caught outside
-  it takes steady damage. Because it's radial it works with the wrap-around
-  world: sailing across the screen just gets you towed back to the fight. As
-  captains are eliminated, **fewer bounties spawn**, tightening the endgame.
+  drift), and a circular calm **eye shrinks over time**. There's no damage for
+  being outside — the pull itself is strong enough that even a ship sailing
+  straight out gets dragged back in. Because it's radial it works with the
+  wrap-around world: sailing across the screen just tows you back to the fight.
+  As captains are eliminated, **fewer bounties spawn**, tightening the endgame.
 - **Host-authoritative netcode** — the room creator simulates the battle and
   broadcasts 30 Hz snapshots; guests send steering/fire inputs and render with
   smoothing. Rooms are matched through the free public PeerJS broker, then all

@@ -78,9 +78,10 @@ const WHIRL_START = 15; // s of calm before the maelstrom forms
 const WHIRL_RAMP = 55; // s to reach full strength
 const EYE_MAX = 720; // eye radius before the whirlpool forms (covers most of the arena)
 const EYE_MIN = 150; // fully-formed eye radius
-const PULL_MAX = 85; // px/s inward current at full strength (outside the eye)
+// Pull > the fastest hull (110 px/s) at full strength, so even a ship sailing
+// straight out gets dragged inward — the current alone converges the fight.
+const PULL_MAX = 125; // px/s inward current at full strength (outside the eye)
 const SWIRL_FRAC = 0.5; // tangential swirl as a fraction of the inward pull
-const WHIRL_DPS = 1.3; // hull damage/s while outside the eye (scaled by strength)
 
 // Spawn cadence per type (min, max seconds). Health is common; the rest rarer.
 const PICKUP_SPAWN: Record<PickupType, [number, number]> = {
@@ -936,7 +937,7 @@ export class MpSession {
 
     const cx = WORLD_W / 2;
     const cy = WORLD_H / 2;
-    this.ships.forEach((ship, i) => {
+    this.ships.forEach((ship) => {
       if (!ship.alive) return;
       const dx = cx - ship.x;
       const dy = cy - ship.y;
@@ -954,13 +955,6 @@ export class MpSession {
       if (!shipHitsIsland(this.islands, { x: tx, y: ty, width: ship.width })) {
         ship.x = tx;
         ship.y = ty;
-      }
-
-      // Damage anyone caught outside the eye (spawn-protected ships are exempt).
-      if (outside && this.spawnUntil[i] <= this.clock) {
-        const before = ship.health;
-        ship.takeHit(WHIRL_DPS * s * dt);
-        if (before > 0 && ship.health <= 0) this.pendingEvents.push({ e: 'hit', x: ship.x, y: ship.y });
       }
     });
   }
@@ -1567,7 +1561,7 @@ export class MpSession {
       ctx.font = 'bold 15px system-ui, sans-serif';
       ctx.textAlign = 'center';
       ctx.textBaseline = 'top';
-      const text = '🌀 MAELSTROM — STAY IN THE EYE';
+      const text = '🌀 MAELSTROM — THE SEA IS PULLING IN';
       const x = ctx.canvas.width / 2;
       ctx.lineWidth = 3;
       ctx.strokeStyle = 'rgba(0, 0, 0, 0.6)';

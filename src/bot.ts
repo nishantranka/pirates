@@ -263,8 +263,8 @@ export function decideBot(
   else if (ramTarget) desired = Math.atan2(ramTarget.y - self.y, ramTarget.x - self.x);
   else desired = fightHeading(self, target, wind);
 
-  // Caught outside the whirlpool eye? Making it back to safety overrides all —
-  // the storm damage will grind you down otherwise.
+  // Caught outside the whirlpool eye? Head back in — the current is dragging
+  // everyone toward the middle, so meet the fight there rather than fight it.
   if (eye && Math.hypot(eye.x - self.x, eye.y - self.y) > eye.r) {
     desired = Math.atan2(eye.y - self.y, eye.x - self.x);
   }
