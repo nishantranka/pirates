@@ -468,6 +468,13 @@ canvas {
   user-select: all;
 }
 
+.copy-link {
+  font-size: 13px;
+  padding: 8px 16px;
+  min-height: 36px;
+  margin-bottom: 4px;
+}
+
 .lobby-players {
   display: flex;
   flex-direction: column;

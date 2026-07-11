@@ -333,6 +333,8 @@ const mpStatus = document.getElementById('mp-status')!;
 const lobbyOverlay = document.getElementById('lobby-overlay')!;
 const roomCodeEl = document.getElementById('room-code')!;
 const roomCodeLabel = document.getElementById('room-code-label')!;
+const copyLinkBtn = document.getElementById('copy-link') as HTMLButtonElement;
+let currentRoomCode = '';
 const lobbyPlayersEl = document.getElementById('lobby-players')!;
 const lobbyShipRow = document.getElementById('lobby-ship-cards')!;
 const btnReady = document.getElementById('btn-ready') as HTMLButtonElement;
@@ -465,16 +467,20 @@ function mpCallbacks() {
   return {
     onRoomReady(code: string) {
       mpStatus.textContent = '';
+      currentRoomCode = code;
       roomCodeEl.textContent = code || 'connecting…';
       roomCodeLabel.textContent = code
         ? 'Room code — share it with your crew'
         : 'Room code';
+      copyLinkBtn.classList.toggle('hidden', !code);
       menuOverlay.classList.add('hidden');
       lobbyOverlay.classList.remove('hidden');
       mpCreateBtn.disabled = false;
       mpJoinBtn.disabled = false;
     },
     onRoomCode(code: string | null) {
+      currentRoomCode = code ?? '';
+      copyLinkBtn.classList.toggle('hidden', !code);
       if (code) {
         roomCodeEl.textContent = code;
         roomCodeLabel.textContent = 'Room code — share it with your crew';
@@ -519,8 +525,20 @@ function mpCallbacks() {
   };
 }
 
+/** Remember the captain name so invite links can auto-join next time. */
+function rememberName() {
+  const n = mpNameInput.value.trim();
+  if (!n) return;
+  try {
+    localStorage.setItem('pirates-name', n);
+  } catch {
+    /* ignore */
+  }
+}
+
 mpCreateBtn.addEventListener('click', () => {
   if (mp) return;
+  rememberName();
   mpStatus.textContent = 'Opening room…';
   mpCreateBtn.disabled = true;
   mpJoinBtn.disabled = true;
@@ -537,6 +555,7 @@ mpJoinBtn.addEventListener('click', () => {
     mpStatus.textContent = `Room codes are ${CODE_LENGTH} characters.`;
     return;
   }
+  rememberName();
   mpStatus.textContent = 'Joining…';
   mpCreateBtn.disabled = true;
   mpJoinBtn.disabled = true;
@@ -548,6 +567,28 @@ mpJoinBtn.addEventListener('click', () => {
 
 mpCodeInput.addEventListener('keydown', (e) => {
   if (e.key === 'Enter') mpJoinBtn.click();
+});
+
+// Enter in the name field: join if a code is filled in, otherwise create.
+mpNameInput.addEventListener('keydown', (e) => {
+  if (e.key !== 'Enter') return;
+  if (mpCodeInput.value.trim().length === CODE_LENGTH) mpJoinBtn.click();
+  else mpCreateBtn.click();
+});
+
+// Copy a clickable invite link — opening it joins this room directly.
+copyLinkBtn.addEventListener('click', async () => {
+  if (!currentRoomCode) return;
+  const url = `${location.origin}${location.pathname}#room=${currentRoomCode}`;
+  try {
+    await navigator.clipboard.writeText(url);
+    copyLinkBtn.textContent = '✅ Link copied!';
+  } catch {
+    copyLinkBtn.textContent = url; // clipboard blocked — show it for manual copy
+  }
+  setTimeout(() => {
+    copyLinkBtn.textContent = '🔗 Copy invite link';
+  }, 2200);
 });
 
 btnReady.addEventListener('click', () => {
@@ -664,3 +705,36 @@ rulesClose.addEventListener('click', () => rulesOverlay.classList.add('hidden'))
 window.addEventListener('keydown', (e) => {
   if (e.code === 'Escape') rulesOverlay.classList.add('hidden');
 });
+
+// ── Invite links ──────────────────────────────────────────────────────────────
+// Opening .../#room=ABCDE jumps straight into that room: auto-join if we know
+// the player's name from a previous session, otherwise prefill the code and
+// let them type a name + press Enter.
+
+(function handleInviteLink() {
+  const m = /(?:^|[#&?])room=([A-Za-z0-9]+)/i.exec(location.hash || location.search);
+  const code = m?.[1]?.toUpperCase() ?? '';
+  if (code.length !== CODE_LENGTH) return;
+
+  // Consume the hash so a later refresh doesn't silently re-join.
+  history.replaceState(null, '', location.pathname + location.search);
+
+  selectedMode = 'multiplayer';
+  selectCard(modeRow, 'multiplayer');
+  updateModeUI();
+  mpCodeInput.value = code;
+
+  let savedName = '';
+  try {
+    savedName = localStorage.getItem('pirates-name') ?? '';
+  } catch {
+    /* ignore */
+  }
+  if (savedName) {
+    mpNameInput.value = savedName;
+    mpJoinBtn.click(); // straight into the lobby
+  } else {
+    mpStatus.textContent = `You're invited to room ${code} — enter a captain name to join!`;
+    mpNameInput.focus();
+  }
+})();
