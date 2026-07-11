@@ -1,7 +1,7 @@
 import { Game, DIFFICULTIES, type DifficultyName } from './game';
 import { Input } from './input';
 import { MpSession, MAX_PLAYERS, PLAYER_COLORS, type LeaderboardEntry } from './multiplayer';
-import { CODE_LENGTH, type LobbyPlayerInfo } from './net';
+import { CODE_LENGTH, type LobbyPlayerInfo, type MpMode } from './net';
 import { SAIL_TYPES, SHIP_TYPES, type ShipTypeName } from './ship';
 import './style.css';
 
@@ -354,6 +354,18 @@ let mp: MpSession | null = null;
 let myReady = false;
 let myShip: ShipTypeName = 'small';
 
+// Battle-mode cards inside the lobby — the host picks the win condition.
+const lobbyModeRow = document.getElementById('lobby-mode-cards')!;
+const mpModeOptions: Array<{ key: MpMode; label: string; stat: string }> = [
+  { key: 'score', label: 'Leaderboard', stat: 'sinks + damage + survival' },
+  { key: 'survival', label: 'Survivor', stat: 'last one standing wins' },
+];
+mpModeOptions.forEach(({ key, label, stat }) => {
+  const card = makeCard(label, stat, key);
+  card.addEventListener('click', () => mp?.setMode(key)); // no-op for guests
+  lobbyModeRow.appendChild(card);
+});
+
 // Ship cards inside the lobby — each captain picks their own boat.
 (Object.keys(SHIP_TYPES) as ShipTypeName[]).forEach((type) => {
   const card = makeCard(type[0].toUpperCase() + type.slice(1), shipStat(type), type);
@@ -365,7 +377,8 @@ let myShip: ShipTypeName = 'small';
   lobbyShipRow.appendChild(card);
 });
 
-function renderLobby(players: LobbyPlayerInfo[], you: number, canStart: boolean) {
+function renderLobby(players: LobbyPlayerInfo[], you: number, canStart: boolean, mode: MpMode) {
+  selectCard(lobbyModeRow, mode);
   lobbyPlayersEl.innerHTML = '';
   players.forEach((p, i) => {
     const row = document.createElement('div');
@@ -471,8 +484,8 @@ function mpCallbacks() {
         roomCodeLabel.textContent = 'No connection — add bots to play';
       }
     },
-    onLobby(players: LobbyPlayerInfo[], you: number, canStart: boolean) {
-      renderLobby(players, you, canStart);
+    onLobby(players: LobbyPlayerInfo[], you: number, canStart: boolean, mode: MpMode) {
+      renderLobby(players, you, canStart, mode);
     },
     onStart() {
       lobbyOverlay.classList.add('hidden');
@@ -480,7 +493,12 @@ function mpCallbacks() {
       game.suspended = true;
     },
     onEnd(winnerName: string | null) {
-      mpendTitle.textContent = winnerName ? `☠️ ${winnerName} rules the seas!` : 'Mutual destruction — a draw!';
+      const survival = mp?.gameMode === 'survival';
+      mpendTitle.textContent = winnerName
+        ? survival
+          ? `⏱️ ${winnerName} outlasted them all!`
+          : `☠️ ${winnerName} rules the seas!`
+        : 'Mutual destruction — a draw!';
       // Final standings on the end screen.
       const board = mp?.getLeaderboard() ?? [];
       mpendBoard.replaceChildren(...board.map((e, i) => renderLbRow(e, i + 1)));

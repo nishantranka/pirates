@@ -228,6 +228,7 @@ export function decideBot(
   islands: IslandData[],
   wind: Wind,
   eye?: { x: number; y: number; r: number },
+  survival = false,
 ): BotDecision {
   // Submerged submarines are invisible — bots can't target what they can't see.
   const enemies = ships.filter((s) => s !== self && s.alive && s.depth <= 0.5);
@@ -251,17 +252,21 @@ export function decideBot(
     }
   }
 
+  // Survivor mode: staying afloat is all that matters. Never hunt, never ram —
+  // keep distance from everyone and only trade defensive broadsides in passing.
   const wounded = self.health <= Math.max(2, self.maxHealth * FLEE_HEALTH);
-  const fleeing = wounded && threatDist < FLEE_TRIGGER;
+  const fleeing = survival ? threatDist < 430 : wounded && threatDist < FLEE_TRIGGER;
   // When healthy but being raked, break the geometry instead of sitting in it.
   const raker = fleeing ? null : broadsideThreat(self, enemies);
   // Ram opportunity: a weaker enemy close and ahead — charge the bow through it.
-  const ramTarget = fleeing || raker ? null : pickRamTarget(self, enemies, islands);
+  const ramTarget =
+    survival || fleeing || raker ? null : pickRamTarget(self, enemies, islands);
 
   let desired: number;
   if (fleeing) desired = fleeHeading(self, threat, islands, wind);
   else if (raker) desired = evadeHeading(self, raker, enemies, islands, wind);
   else if (ramTarget) desired = Math.atan2(ramTarget.y - self.y, ramTarget.x - self.x);
+  else if (survival) desired = self.heading; // nobody near: hold course, stay out of trouble
   else desired = fightHeading(self, target, wind);
 
   // Whirlpool awareness: never sail out of the eye. If already outside, head

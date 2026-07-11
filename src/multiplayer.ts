@@ -27,6 +27,7 @@ import {
   type GameEvent,
   type H2CMsg,
   type LobbyPlayerInfo,
+  type MpMode,
   type PeerHandle,
   type PickupType,
   type ShipSpawn,
@@ -281,7 +282,7 @@ export interface MpCallbacks {
   /** Host only: the shareable code arrived (string), or the broker was
    *  unreachable so this is an offline, bots-only room (null). */
   onRoomCode(code: string | null): void;
-  onLobby(players: LobbyPlayerInfo[], you: number, canStart: boolean): void;
+  onLobby(players: LobbyPlayerInfo[], you: number, canStart: boolean, mode: MpMode): void;
   onStart(): void;
   /** winnerName null = mutual destruction. */
   onEnd(winnerName: string | null): void;
@@ -340,6 +341,7 @@ export class MpSession {
   private guestCharge: number[] = []; // dive charge fractions mirrored from snapshots (guest)
   private eyeR = EYE_MAX; // whirlpool eye radius (host computes, guest mirrors)
   private freeze = 0; // start-of-round locate-your-ship pause (host computes, guest mirrors)
+  private mode: MpMode = 'score'; // win condition (host picks in the lobby, guest mirrors)
   private wind = new Wind();
   private explosions: Explosion[] = [];
   private splashes: Splash[] = [];
@@ -489,6 +491,18 @@ export class MpSession {
     this.pushLobby();
   }
 
+  /** Host only: choose the win condition (Leaderboard score vs Survivor). */
+  setMode(mode: MpMode) {
+    if (!this.isHost || this.phase !== 'lobby') return;
+    this.mode = mode;
+    this.pushLobby();
+  }
+
+  /** The current win condition (for UI copy). */
+  get gameMode(): MpMode {
+    return this.mode;
+  }
+
   /** Host only: launch the battle (lobby must be all-ready with 2+ players). */
   startBattle() {
     if (!this.isHost || this.phase !== 'lobby' || !this.canStart()) return;
@@ -611,9 +625,9 @@ export class MpSession {
       bot: p.bot,
     }));
     this.players.forEach((p, i) => {
-      if (p.conn?.open) p.conn.send({ t: 'lobby', players: info, you: i } satisfies H2CMsg);
+      if (p.conn?.open) p.conn.send({ t: 'lobby', players: info, you: i, mode: this.mode } satisfies H2CMsg);
     });
-    this.cb.onLobby(info, 0, this.canStart());
+    this.cb.onLobby(info, 0, this.canStart(), this.mode);
   }
 
   private broadcast(msg: H2CMsg) {
@@ -681,7 +695,13 @@ export class MpSession {
 
     this.players.forEach((p, i) => {
       if (p.conn?.open) {
-        p.conn.send({ t: 'start', islands: this.islands, ships: this.spawns, you: i } satisfies H2CMsg);
+        p.conn.send({
+          t: 'start',
+          islands: this.islands,
+          ships: this.spawns,
+          you: i,
+          mode: this.mode,
+        } satisfies H2CMsg);
       }
     });
 
@@ -724,7 +744,14 @@ export class MpSession {
         this.eyeR < EYE_MAX ? { x: WORLD_W / 2, y: WORLD_H / 2, r: this.eyeR } : undefined;
       this.players.forEach((p, i) => {
         if (!p.bot) return;
-        const d = decideBot(this.ships[i], this.ships, this.islands, this.wind, eye);
+        const d = decideBot(
+          this.ships[i],
+          this.ships,
+          this.islands,
+          this.wind,
+          eye,
+          this.mode === 'survival',
+        );
         p.turn = d.turn;
         p.fire = d.fire;
       });
@@ -1157,7 +1184,11 @@ export class MpSession {
       };
       const sc = this.scores[i];
       this.scoreView[i] = {
-        score: sc.time * SCORE_TIME + sc.damage * SCORE_DAMAGE + sc.kills * SCORE_KILL,
+        // Survivor: only time afloat counts. Leaderboard: the weighted mix.
+        score:
+          this.mode === 'survival'
+            ? sc.time
+            : sc.time * SCORE_TIME + sc.damage * SCORE_DAMAGE + sc.kills * SCORE_KILL,
         kills: sc.kills,
       };
     }
@@ -1168,19 +1199,27 @@ export class MpSession {
     return this.phase === 'battle' || this.phase === 'end';
   }
 
-  /** Live standings, ranked by weighted score (survival + damage + sinks). */
+  /** Live standings. Leaderboard mode: weighted score. Survivor: alive ships
+   *  outrank sunk ones, then longest time afloat. */
   getLeaderboard(): LeaderboardEntry[] {
-    return this.ships
-      .map((s, i) => ({
-        idx: i,
-        name: this.spawns[i]?.name ?? '',
-        color: this.spawns[i]?.color ?? '#fff',
-        score: Math.round(this.scoreView[i]?.score ?? 0),
-        kills: this.scoreView[i]?.kills ?? 0,
-        alive: s.alive,
-        you: i === this.you,
-      }))
-      .sort((a, b) => b.score - a.score);
+    const rows = this.ships.map((s, i) => ({
+      idx: i,
+      name: this.spawns[i]?.name ?? '',
+      color: this.spawns[i]?.color ?? '#fff',
+      score: Math.round(this.scoreView[i]?.score ?? 0),
+      kills: this.scoreView[i]?.kills ?? 0,
+      alive: s.alive,
+      you: i === this.you,
+    }));
+    if (this.mode === 'survival') {
+      return rows.sort(
+        (a, b) =>
+          Number(b.alive) - Number(a.alive) ||
+          b.score - a.score ||
+          this.ships[b.idx].health - this.ships[a.idx].health,
+      );
+    }
+    return rows.sort((a, b) => b.score - a.score);
   }
 
   private sendSnapshot() {
@@ -1229,13 +1268,15 @@ export class MpSession {
           this.cb.onRoomReady(code.toUpperCase().trim());
         }
         this.you = msg.you;
-        this.cb.onLobby(msg.players, msg.you, false);
+        this.mode = msg.mode;
+        this.cb.onLobby(msg.players, msg.you, false, msg.mode);
         break;
 
       case 'start':
         this.islands = msg.islands;
         this.spawns = msg.ships;
         this.you = msg.you;
+        this.mode = msg.mode;
         this.ships = msg.ships.map((sp) => new Ship(sp.x, sp.y, sp.heading, sp.color, sp.type));
         this.ships[this.you].hullColor = YOU_COLOR; // your own hull is always pink
         this.freeze = START_FREEZE;
@@ -1582,17 +1623,21 @@ export class MpSession {
     if (!v) return;
     const ctx = this.ctx;
 
-    // Spawn protection: a bright golden bubble so it's clearly untouchable.
-    if (v.inv) {
+    // Spawn window: ONLY your own ship glows — a bright pink pulsing halo —
+    // so there's exactly one glowing ship on screen: yours.
+    if (v.inv && i === this.you) {
+      const pulse = 0.5 + 0.5 * Math.sin(performance.now() / 160);
       ctx.save();
-      ctx.globalAlpha = 0.35 + 0.2 * Math.sin(performance.now() / 120);
-      ctx.fillStyle = '#ffe6a0';
+      ctx.globalAlpha = 0.25 + 0.2 * pulse;
+      ctx.fillStyle = '#ff8ec6';
       ctx.beginPath();
-      ctx.arc(ship.x, ship.y, ship.length * 0.85, 0, Math.PI * 2);
+      ctx.arc(ship.x, ship.y, ship.length * (0.95 + 0.15 * pulse), 0, Math.PI * 2);
       ctx.fill();
-      ctx.globalAlpha = 0.9;
-      ctx.strokeStyle = '#ffd75e';
-      ctx.lineWidth = 2.5;
+      ctx.globalAlpha = 0.95;
+      ctx.strokeStyle = '#ff4fa0';
+      ctx.lineWidth = 3.5;
+      ctx.beginPath();
+      ctx.arc(ship.x, ship.y, ship.length * (0.95 + 0.15 * pulse), 0, Math.PI * 2);
       ctx.stroke();
       ctx.restore();
     }
@@ -1780,27 +1825,21 @@ export class MpSession {
       ctx.restore();
     }
 
-    // Start-of-round countdown: give everyone a beat to find their pink ship.
+    // Start-of-round countdown — just the number; your glowing pink ship is
+    // the only glow on screen, which is the real "you are here".
     if (this.phase === 'battle' && this.freeze > 0) {
       const ctx = this.ctx;
       const x = this.viewW / 2;
-      const y = this.viewH * 0.3;
       ctx.save();
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
-
-      ctx.font = 'bold 30px system-ui, sans-serif';
-      ctx.lineWidth = 5;
-      ctx.strokeStyle = 'rgba(0, 0, 0, 0.65)';
-      ctx.strokeText('Find your PINK ship!', x, y);
-      ctx.fillStyle = '#ff9dc7';
-      ctx.fillText('Find your PINK ship!', x, y);
-
       ctx.font = 'bold 64px system-ui, sans-serif';
       const n = String(Math.ceil(this.freeze));
-      ctx.strokeText(n, x, y + 62);
+      ctx.lineWidth = 5;
+      ctx.strokeStyle = 'rgba(0, 0, 0, 0.65)';
+      ctx.strokeText(n, x, this.viewH * 0.34);
       ctx.fillStyle = '#ffffff';
-      ctx.fillText(n, x, y + 62);
+      ctx.fillText(n, x, this.viewH * 0.34);
       ctx.restore();
     }
   }

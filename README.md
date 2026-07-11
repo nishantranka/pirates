@@ -78,8 +78,12 @@ battle once 2–11 captains are in. Solo? Hit **Fill with Bots** for an instant
   an island blocks the shot, and when wounded they break off and run for
   cover, favoring fast points of sail and keeping islands between themselves
   and the threat.
-- **Scoring & leaderboard** — you're ranked by a weighted score: **sinking**
-  enemies counts most (8 pts), **damage dealt** next, and **time survived** least. A
+- **Two battle modes** (host picks in the lobby): **Leaderboard** ranks by a
+  weighted score — **sinking** enemies counts most (8 pts), **damage dealt**
+  next, and **time survived** least. **Survivor** ignores kills entirely: only
+  time afloat counts and the last one standing wins — bots switch to a
+  cautious, evasive doctrine (no hunting, no ramming) and fight only in
+  self-defense. A
   collapsible standings panel sits top-right (collapsed to a pill showing the
   current leader; click to expand the full ranked board), and the **final
   standings are shown on the end screen**. The captain with the highest score

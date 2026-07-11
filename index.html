@@ -100,11 +100,14 @@
             full strength.
           </p>
 
-          <h2>🏆 Scoring</h2>
+          <h2>🏆 Scoring &amp; Battle Modes</h2>
           <p>
-            Your score = <b>sinking shots</b> (8 pts, weighted most) + <b>damage dealt</b>
-            (1 pt per hull point) + <b>time survived</b> (0.1 pt/s, weighted least). The
-            round ends when one ship remains or every human is dead — the top score wins.
+            The host picks the win condition in the lobby.
+            <b>Leaderboard</b>: score = <b>sinking shots</b> (8 pts, weighted most) +
+            <b>damage dealt</b> (1 pt per hull point) + <b>time survived</b> (0.1 pt/s).
+            <b>Survivor</b>: kills don't matter — only <b>time afloat</b> counts, and the
+            last one standing wins (bots play cautiously and evade instead of hunting).
+            Either way the round ends when one ship remains or every human is dead.
             Click the 🏆 pill (top-right) for live standings.
           </p>
 
@@ -186,6 +189,9 @@
 
           <div class="section-label" id="room-code-label">Room code — share it with your crew</div>
           <div id="room-code" class="room-code"></div>
+
+          <div class="section-label">Battle mode — host picks</div>
+          <div class="card-row" id="lobby-mode-cards"></div>
 
           <div class="section-label">Captains</div>
           <div id="lobby-players" class="lobby-players"></div>

@@ -15,6 +15,9 @@ export const CODE_LENGTH = 5;
 
 // ── Wire types ────────────────────────────────────────────────────────────────
 
+/** Multiplayer win condition: weighted score vs pure last-one-standing. */
+export type MpMode = 'score' | 'survival';
+
 export interface LobbyPlayerInfo {
   name: string;
   ship: ShipTypeName;
@@ -81,8 +84,8 @@ export type C2HMsg =
 /** Host → guest. */
 export type H2CMsg =
   | { t: 'reject'; reason: string }
-  | { t: 'lobby'; players: LobbyPlayerInfo[]; you: number }
-  | { t: 'start'; islands: IslandData[]; ships: ShipSpawn[]; you: number }
+  | { t: 'lobby'; players: LobbyPlayerInfo[]; you: number; mode: MpMode }
+  | { t: 'start'; islands: IslandData[]; ships: ShipSpawn[]; you: number; mode: MpMode }
   | {
       t: 'state';
       ships: ShipState[];
