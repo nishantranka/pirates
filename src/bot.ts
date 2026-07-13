@@ -125,18 +125,15 @@ function aimPoint(self: Ship, target: Ship, wind: Wind): { x: number; y: number 
   };
 }
 
-/** Chase from afar (avoiding the upwind crawl); swing broadside-on when close. */
+/** Chase from afar (avoiding the upwind crawl); swing the starboard guns on when close. */
 function fightHeading(self: Ship, target: Ship, wind: Wind): number {
   const aim = aimPoint(self, target, wind);
   const bearing = Math.atan2(aim.y - self.y, aim.x - self.x);
   const dist = Math.hypot(target.x - self.x, target.y - self.y);
 
   if (dist < BROADSIDE_RANGE) {
-    const port = bearing - Math.PI / 2;
-    const starboard = bearing + Math.PI / 2;
-    return Math.abs(angleDiff(port, self.heading)) < Math.abs(angleDiff(starboard, self.heading))
-      ? port
-      : starboard;
+    // Guns are on the starboard rail only: put the target 90° to starboard.
+    return bearing - Math.PI / 2;
   }
 
   const upwind = wind.direction + Math.PI;
@@ -210,10 +207,11 @@ function safestTurn(self: Ship, desired: Turn, islands: IslandData[]): Turn {
   return bestTurn;
 }
 
-/** Would `a`'s broadside bear on `b` right now (b roughly 90° off a's bow)? */
+/** Would `a`'s broadside bear on `b` right now (b ~90° to a's starboard,
+ *  the only side ships fire from)? */
 function broadsideBears(a: Ship, b: Ship, cone = FIRE_CONE): boolean {
   const bearing = Math.atan2(b.y - a.y, b.x - a.x);
-  const offBow = Math.abs(angleDiff(bearing, a.heading));
+  const offBow = angleDiff(bearing, a.heading);
   return Math.abs(offBow - Math.PI / 2) < cone;
 }
 
@@ -266,7 +264,8 @@ function evadeHeading(
     for (const e of enemies) {
       const bFromE = Math.atan2(fy - e.y, fx - e.x);
       const dist = Math.hypot(fx - e.x, fy - e.y);
-      const offBeam = Math.abs(Math.abs(angleDiff(bFromE, e.heading)) - Math.PI / 2);
+      // Only the enemy's starboard arc is dangerous — that's where guns fire.
+      const offBeam = Math.abs(angleDiff(bFromE, e.heading) - Math.PI / 2);
       if (dist < FIRE_RANGE && offBeam < 0.5) score -= e.reload <= 0.7 ? 2.5 : 1.2;
       if (e === raker) {
         const astern = Math.abs(angleDiff(bFromE, e.heading + Math.PI));
@@ -394,7 +393,7 @@ export function decideBot(
   let fire = false;
   if (aimDist < FIRE_RANGE) {
     const bearing = Math.atan2(aim.y - self.y, aim.x - self.x);
-    const offBow = Math.abs(angleDiff(bearing, self.heading));
+    const offBow = angleDiff(bearing, self.heading); // signed: guns face starboard
     fire =
       Math.abs(offBow - Math.PI / 2) < FIRE_CONE &&
       !segmentHitsIsland(islands, self.x, self.y, aim.x, aim.y);

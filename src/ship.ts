@@ -61,8 +61,8 @@ export class Ship {
   depth = 0; // submarine: 0 surfaced → 1 fully submerged
   /** Fading wake behind the hull; purely visual, maintained by the renderer. */
   wake: Array<{ x: number; y: number; t: number }> = [];
-  /** Renderer hint: double-broadside power-up active — the fixed gun stubs
-   *  on both gunwales draw longer and glow gold while it runs. */
+  /** Renderer hint: double-broadside power-up active — gun stubs appear on
+   *  BOTH gunwales, longer and glowing gold, while it runs. */
   gunHighlight = false;
 
   readonly type: ShipTypeName;
@@ -246,14 +246,14 @@ export class Ship {
       ctx.stroke();
     }
 
-    // Cannon muzzles: slim rounded stubs just past both gunwales — a fixed
-    // part of the ship art (broadsides always fire perpendicular to the hull,
-    // either side). While double broadside runs they lengthen and glow gold.
+    // Cannon muzzles: slim rounded stubs on the STARBOARD rail only — that's
+    // the one side every broadside fires from, and it never changes. While
+    // double broadside runs, muzzles appear on both sides, longer and gold.
     ctx.strokeStyle = this.gunHighlight ? '#ffd75e' : 'rgba(22, 27, 33, 0.8)';
     ctx.lineWidth = this.gunHighlight ? 3 : 2.2;
     ctx.lineCap = 'round';
     const reach = this.gunHighlight ? w * 0.74 : w * 0.62;
-    for (const s of [1, -1]) {
+    for (const s of this.gunHighlight ? [1, -1] : [1]) {
       for (let i = 0; i < this.guns; i++) {
         const gx = (this.guns === 1 ? 0 : i / (this.guns - 1) - 0.5) * (l / 2);
         ctx.beginPath();
