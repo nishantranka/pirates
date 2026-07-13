@@ -4,11 +4,14 @@
 // Doctrine: hunt the most promising target (close and already damaged), lead
 // shots accounting for wind, and never waste a broadside into an island. When
 // wounded with an enemy bearing down, break off and run — preferring headings
-// with strong wind and with an island between us and the threat.
+// with strong wind and with an island between us and the threat. Power-ups
+// are part of the plan: a hurting bot detours for health or a shield, a
+// healthy hunter grabs rapid fire or a double broadside.
 
 import { angleDiff } from './ai';
 import { CANNONBALL_SPEED } from './cannonball';
 import { islandHitsPoint, segmentHitsIsland, type IslandData } from './island';
+import type { PickupType } from './net';
 import type { Ship, Turn } from './ship';
 import type { Wind } from './wind';
 
@@ -31,6 +34,85 @@ const THREAT_RANGE = FIRE_RANGE + 60; // px; an enemy this close on our beam is 
 export interface BotDecision {
   turn: Turn;
   fire: boolean;
+}
+
+/** What the bot can see of a floating bounty. */
+export interface PickupInfo {
+  type: PickupType;
+  x: number;
+  y: number;
+}
+
+/** The bot's own active offensive buffs (no point stacking another). */
+export interface BotBuffState {
+  dbl: boolean;
+  mg: boolean;
+}
+
+const PICKUP_RANGE = 520; // px; don't cross the map for a bounty
+const PICKUP_DIST_COST = 1 / 200; // utility lost per px of detour
+
+/**
+ * How much this bot wants a pickup of the given type right now. 0 = skip.
+ * Hurting bots value staying alive (health, shield, speed); healthy hunters
+ * value firepower; survivor-mode bots barely care about guns at all.
+ */
+function pickupUtility(
+  type: PickupType,
+  self: Ship,
+  buffs: BotBuffState,
+  wounded: boolean,
+  survival: boolean,
+): number {
+  switch (type) {
+    case 'health': {
+      const missing = self.maxHealth - self.health;
+      return missing <= 0 ? 0 : (wounded ? 2.6 : 0.9) + missing * 0.5;
+    }
+    case 'shield':
+      return self.shield > 1 ? 0 : survival || wounded ? 2.4 : 1.3;
+    case 'speed':
+      return self.boostFactor > 1 ? 0 : survival || wounded ? 1.9 : 1.2;
+    case 'double':
+      return buffs.dbl || wounded ? 0 : survival ? 0.4 : 1.7;
+    case 'machinegun':
+      return buffs.mg || wounded ? 0 : survival ? 0.4 : 2.1;
+  }
+}
+
+/** The best bounty worth a detour right now, or null to keep fighting. */
+function pickPickup(
+  self: Ship,
+  pickups: PickupInfo[],
+  buffs: BotBuffState,
+  wounded: boolean,
+  survival: boolean,
+  threat: Ship | null, // set while fleeing: never grab toward the hunter
+  islands: IslandData[],
+  eye?: { x: number; y: number; r: number },
+): PickupInfo | null {
+  let best: PickupInfo | null = null;
+  let bestScore = 0; // must stay positive after the distance cost
+  for (const p of pickups) {
+    const want = pickupUtility(p.type, self, buffs, wounded, survival);
+    if (want <= 0) continue;
+    const d = Math.hypot(p.x - self.x, p.y - self.y);
+    if (d > PICKUP_RANGE) continue;
+    // Not into the maelstrom, not toward the ship chasing us, not through sand.
+    if (eye && Math.hypot(p.x - eye.x, p.y - eye.y) > eye.r - 40) continue;
+    if (
+      threat &&
+      Math.hypot(p.x - threat.x, p.y - threat.y) < Math.hypot(self.x - threat.x, self.y - threat.y)
+    )
+      continue;
+    if (segmentHitsIsland(islands, self.x, self.y, p.x, p.y)) continue;
+    const score = want - d * PICKUP_DIST_COST;
+    if (score > bestScore) {
+      bestScore = score;
+      best = p;
+    }
+  }
+  return best;
 }
 
 /** Where to shoot: the target's predicted position at cannonball arrival. */
@@ -203,18 +285,23 @@ function evadeHeading(
 const RAM_SEEK_RANGE = 155; // px; charge a weaker enemy this close
 const RAM_SEEK_BOW = 0.5; // must be roughly ahead of us to be worth charging
 
-/** A weaker enemy that's close and ahead, worth ramming — else null. */
+/** A weaker enemy that's close and ahead, worth ramming — else null.
+ *  A bow hit deals 3 and costs us 1, so it's worth it against anyone weaker —
+ *  but never on our last hit points, and never into a waiting bow (bow-to-bow
+ *  costs us 3 too). */
 function pickRamTarget(self: Ship, enemies: Ship[], islands: IslandData[]): Ship | null {
   let best: Ship | null = null;
   let bestDist = RAM_SEEK_RANGE;
-  const bigOrBoosted = self.boostFactor > 1 || self.length >= 56;
-  if (!bigOrBoosted) return null; // only ram from a position of strength
+  if (self.health <= 1) return null; // the 1hp return damage would sink us
   for (const e of enemies) {
     const d = Math.hypot(e.x - self.x, e.y - self.y);
     if (d > bestDist) continue;
     if (e.health > self.health) continue; // don't ram someone tougher
     const bearing = Math.atan2(e.y - self.y, e.x - self.x);
     if (Math.cos(angleDiff(bearing, self.heading)) < RAM_SEEK_BOW) continue; // must be ahead
+    // A facing bow means a 3-for-3 trade — only worth it if we out-hull them.
+    if (Math.cos(angleDiff(e.heading, bearing + Math.PI)) > 0.5 && e.health >= self.health)
+      continue;
     if (segmentHitsIsland(islands, self.x, self.y, e.x, e.y)) continue; // don't charge through sand
     bestDist = d;
     best = e;
@@ -229,6 +316,8 @@ export function decideBot(
   wind: Wind,
   eye?: { x: number; y: number; r: number },
   survival = false,
+  pickups: PickupInfo[] = [],
+  buffs: BotBuffState = { dbl: false, mg: false },
 ): BotDecision {
   // Submerged submarines are invisible — bots can't target what they can't see.
   const enemies = ships.filter((s) => s !== self && s.alive && s.depth <= 0.5);
@@ -262,9 +351,17 @@ export function decideBot(
   const ramTarget =
     survival || fleeing || raker ? null : pickRamTarget(self, enemies, islands);
 
+  // Power-up plan: a bounty worth a detour given our situation (hurting →
+  // health/shield/speed; healthy hunter → firepower). Escaping a raker's
+  // kill-zone still comes first.
+  const goal = raker
+    ? null
+    : pickPickup(self, pickups, buffs, wounded, survival, fleeing ? threat : null, islands, eye);
+
   let desired: number;
-  if (fleeing) desired = fleeHeading(self, threat, islands, wind);
+  if (fleeing && !goal) desired = fleeHeading(self, threat, islands, wind);
   else if (raker) desired = evadeHeading(self, raker, enemies, islands, wind);
+  else if (goal) desired = Math.atan2(goal.y - self.y, goal.x - self.x);
   else if (ramTarget) desired = Math.atan2(ramTarget.y - self.y, ramTarget.x - self.x);
   else if (survival) desired = self.heading; // nobody near: hold course, stay out of trouble
   else desired = fightHeading(self, target, wind);

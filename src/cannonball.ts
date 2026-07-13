@@ -3,10 +3,11 @@ import type { Ship } from './ship';
 export const CANNONBALL_SPEED = 390; // px/s (1.5× base, matching the faster ships)
 const MAX_RANGE = 320; // px before the ball splashes into the sea
 
-// Submarine bow torpedoes: faster, longer-legged, harder-hitting single shot.
+// Submarine bow torpedoes: faster, run basically the whole map (wrapping
+// across edges), and hit for double a point-blank cannonball — no falloff.
 export const TORPEDO_SPEED = 460;
-export const TORPEDO_RANGE = 430;
-export const TORPEDO_DAMAGE = 1.6;
+export const TORPEDO_RANGE = 1600;
+export const TORPEDO_DAMAGE = 2;
 
 export class Cannonball {
   x: number;
@@ -34,15 +35,18 @@ export class Cannonball {
     this.owner = owner;
   }
 
-  update(dt: number) {
-    this.x += this.vx * dt;
-    this.y += this.vy * dt;
+  /** Advance the shot; it wraps across world edges like the ships do. */
+  update(dt: number, worldW: number, worldH: number) {
+    this.x = (((this.x + this.vx * dt) % worldW) + worldW) % worldW;
+    this.y = (((this.y + this.vy * dt) % worldH) + worldH) % worldH;
     this.traveled += this.speed * dt;
     if (this.traveled >= this.range) this.spent = true;
   }
 
-  /** Impact falls off with distance flown: point-blank ≈ full, max range ≈ 40%. */
+  /** Cannonballs fall off with distance flown (point-blank ≈ full, max range
+   *  ≈ 40%); torpedoes hit full-strength however far they've run. */
   get damage(): number {
+    if (this.torpedo) return this.baseDamage;
     return this.baseDamage * (1 - 0.6 * Math.min(this.traveled / this.range, 1));
   }
 
