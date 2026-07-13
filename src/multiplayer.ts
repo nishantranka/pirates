@@ -1518,7 +1518,7 @@ export class MpSession {
       // A submerged submarine is invisible to everyone but its own captain.
       if (i !== this.you && ship.depth > SUB_HIDDEN) return;
       if (ship.sinkProgress < 1) this.drawShipBuffs(ship, i); // aura under the hull
-      this.setGunFlags(ship, i); // barrels show where the next broadside goes
+      ship.gunHighlight = this.buffView[i]?.dbl ?? false; // gold guns during double
       ship.drawWrapped(ctx, WORLD_W, WORLD_H); // ghost across edges = seamless wrap
       if (ship.sinkProgress < 1) {
         this.drawShipHealth(ship);
@@ -1617,17 +1617,6 @@ export class MpSession {
       ctx.fillStyle = '#fff';
       ctx.fillText(meta.label, p.x, yy + PICKUP_R + 3);
     }
-  }
-
-  /** Aim the drawn gun barrels: the side the next broadside would leave from,
-   *  or both sides while the double-broadside power-up is running. Guests can
-   *  compute this too — it only needs ship positions. */
-  private setGunFlags(ship: Ship, i: number) {
-    if (ship.type === 'submarine') return; // its bow tube is always drawn
-    const dbl = this.buffView[i]?.dbl ?? false;
-    const side = this.chooseSide(ship);
-    ship.gunStarboard = dbl || side === 1;
-    ship.gunPort = dbl || side === -1;
   }
 
   /** Auras drawn beneath a ship: spawn shield, power-up shield, speed streak. */

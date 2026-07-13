@@ -61,10 +61,9 @@ export class Ship {
   depth = 0; // submarine: 0 surfaced → 1 fully submerged
   /** Fading wake behind the hull; purely visual, maintained by the renderer. */
   wake: Array<{ x: number; y: number; t: number }> = [];
-  /** Which side(s) the next broadside fires from; set by the renderer each
-   *  frame so the drawn gun barrels always point where the shots will go. */
-  gunPort = false;
-  gunStarboard = false;
+  /** Renderer hint: double-broadside power-up active — the fixed gun stubs
+   *  on both gunwales draw longer and glow gold while it runs. */
+  gunHighlight = false;
 
   readonly type: ShipTypeName;
   readonly length: number;
@@ -192,14 +191,14 @@ export class Ship {
       ctx.lineWidth = 2;
       ctx.stroke();
 
-      // Bow torpedo tube poking out ahead — the sub always fires straight
-      // forward, and the light outline keeps it readable on any hull color.
-      ctx.fillStyle = '#20262c';
-      ctx.strokeStyle = 'rgba(255, 255, 255, 0.6)';
-      ctx.lineWidth = 1;
+      // Bow torpedo tube: a slim rounded stub ahead of the bow — the sub
+      // always fires straight forward.
+      ctx.strokeStyle = 'rgba(22, 27, 33, 0.8)';
+      ctx.lineWidth = 3;
+      ctx.lineCap = 'round';
       ctx.beginPath();
-      ctx.rect(l / 2 - 3, -1.8, 10, 3.6);
-      ctx.fill();
+      ctx.moveTo(l / 2 - 2, 0);
+      ctx.lineTo(l / 2 + 6, 0);
       ctx.stroke();
 
       // Conning tower + periscope dot.
@@ -247,22 +246,19 @@ export class Ship {
       ctx.stroke();
     }
 
-    // Gun barrels on the side(s) the next broadside fires from, drawn on top
-    // of the deck and poking well past the gunwale; the light outline keeps
-    // them readable on any hull color and at the letterboxed multiplayer scale.
-    const gunSides: number[] = [];
-    if (this.gunStarboard) gunSides.push(1);
-    if (this.gunPort) gunSides.push(-1);
-    ctx.fillStyle = '#20262c';
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.6)';
-    ctx.lineWidth = 0.9;
-    for (const s of gunSides) {
+    // Cannon muzzles: slim rounded stubs just past both gunwales — a fixed
+    // part of the ship art (broadsides always fire perpendicular to the hull,
+    // either side). While double broadside runs they lengthen and glow gold.
+    ctx.strokeStyle = this.gunHighlight ? '#ffd75e' : 'rgba(22, 27, 33, 0.8)';
+    ctx.lineWidth = this.gunHighlight ? 3 : 2.2;
+    ctx.lineCap = 'round';
+    const reach = this.gunHighlight ? w * 0.74 : w * 0.62;
+    for (const s of [1, -1]) {
       for (let i = 0; i < this.guns; i++) {
         const gx = (this.guns === 1 ? 0 : i / (this.guns - 1) - 0.5) * (l / 2);
-        const y0 = s > 0 ? w * 0.12 : -w * 0.74;
         ctx.beginPath();
-        ctx.rect(gx - 1.4, y0, 2.8, w * 0.62);
-        ctx.fill();
+        ctx.moveTo(gx, s * w * 0.34);
+        ctx.lineTo(gx, s * reach);
         ctx.stroke();
       }
     }
