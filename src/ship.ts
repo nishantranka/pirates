@@ -40,6 +40,11 @@ export const DIVE = {
 
 const SINK_DURATION = 1.5; // s to fade out after health hits 0
 
+/** Shortest signed delta from 0 to d on a wrapping axis of the given size. */
+export function wrapDelta(d: number, size: number): number {
+  return d - Math.round(d / size) * size;
+}
+
 export class Ship {
   x: number;
   y: number;
@@ -56,6 +61,10 @@ export class Ship {
   depth = 0; // submarine: 0 surfaced → 1 fully submerged
   /** Fading wake behind the hull; purely visual, maintained by the renderer. */
   wake: Array<{ x: number; y: number; t: number }> = [];
+  /** Which side(s) the next broadside fires from; set by the renderer each
+   *  frame so the drawn gun barrels always point where the shots will go. */
+  gunPort = false;
+  gunStarboard = false;
 
   readonly type: ShipTypeName;
   readonly length: number;
@@ -100,18 +109,26 @@ export class Ship {
     this.x += Math.cos(this.heading) * v * dt;
     this.y += Math.sin(this.heading) * v * dt;
 
-    // Wrap around world edges, with margin so the ship fully leaves first.
-    const m = this.length;
-    if (this.x < -m) this.x = worldW + m;
-    if (this.x > worldW + m) this.x = -m;
-    if (this.y < -m) this.y = worldH + m;
-    if (this.y > worldH + m) this.y = -m;
+    // Wrap the moment the center crosses an edge. drawWrapped() renders ghost
+    // copies of the overhanging halves on both sides, so the swap is pixel-
+    // identical and the crossing looks perfectly continuous — and the center
+    // (where health bars, name tags, etc. anchor) is always on screen.
+    this.x = ((this.x % worldW) + worldW) % worldW;
+    this.y = ((this.y % worldH) + worldH) % worldH;
   }
 
   /** Is the point inside this ship's oriented bounding box? */
   containsPoint(px: number, py: number): boolean {
-    const dx = px - this.x;
-    const dy = py - this.y;
+    return this.containsDelta(px - this.x, py - this.y);
+  }
+
+  /** containsPoint on a wrapping world: also catches hits on the ghost copies
+   *  a boundary-straddling hull shows on the far side. */
+  containsPointWrapped(px: number, py: number, worldW: number, worldH: number): boolean {
+    return this.containsDelta(wrapDelta(px - this.x, worldW), wrapDelta(py - this.y, worldH));
+  }
+
+  private containsDelta(dx: number, dy: number): boolean {
     const cos = Math.cos(-this.heading);
     const sin = Math.sin(-this.heading);
     const localX = dx * cos - dy * sin;
@@ -161,6 +178,10 @@ export class Ship {
     const w = this.width;
 
     if (this.type === 'submarine') {
+      // Bow torpedo tube — the sub always fires straight ahead.
+      ctx.fillStyle = 'rgba(20, 24, 28, 0.85)';
+      ctx.fillRect(l / 2 - 2, -1.6, 8, 3.2);
+
       // Cigar hull with a rounded bow and tapered stern.
       ctx.beginPath();
       ctx.moveTo(l / 2, 0);
@@ -187,6 +208,20 @@ export class Ship {
 
       ctx.restore();
       return;
+    }
+
+    // Gun barrels poking out of the side(s) the next broadside fires from —
+    // drawn under the hull so only the muzzles show past the gunwale.
+    ctx.fillStyle = 'rgba(20, 24, 28, 0.85)';
+    const gunSides: number[] = [];
+    if (this.gunStarboard) gunSides.push(1);
+    if (this.gunPort) gunSides.push(-1);
+    for (const s of gunSides) {
+      for (let i = 0; i < this.guns; i++) {
+        const gx = (this.guns === 1 ? 0 : i / (this.guns - 1) - 0.5) * (l / 2);
+        const y0 = s > 0 ? w * 0.22 : -w * 0.66;
+        ctx.fillRect(gx - 1.2, y0, 2.4, w * 0.44);
+      }
     }
 
     // Hull: pointed bow (+x), flat stern.

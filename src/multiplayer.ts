@@ -33,7 +33,7 @@ import {
   type ShipSpawn,
   type ShipState,
 } from './net';
-import { DIVE, SAIL_TYPES, Ship, SHIP_TYPES, YOU_COLOR, type ShipTypeName, type Turn } from './ship';
+import { DIVE, SAIL_TYPES, Ship, SHIP_TYPES, wrapDelta, YOU_COLOR, type ShipTypeName, type Turn } from './ship';
 import { Wind } from './wind';
 import type { DataConnection } from 'peerjs';
 
@@ -47,7 +47,7 @@ const RELOAD = 1.4; // s between broadsides, same for everyone
 // ── Power-ups ─────────────────────────────────────────────────────────────────
 const MG_RELOAD = 0.16; // machine-gun cadence
 const MG_DURATION = 5; // s of continuous fire
-const DOUBLE_DURATION = 12; // s of firing both sides at once
+const DOUBLE_DURATION = 10; // s of firing both sides at once (barrels show on both)
 const SPEED_DURATION = 8; // s of double speed
 const SPEED_MULT = 2;
 const SHIELD_HITS = 5; // incoming hits absorbed
@@ -67,14 +67,12 @@ const SUB_IMMUNE = DIVE.immune;
 const SUB_HIDDEN = DIVE.hidden;
 const MG_RELOAD_SUB = 0.35; // rapid-fire cadence for torpedoes
 
-// Ramming (bow-spike model): damage scales with speed, how bow-on the hit is,
-// and hull size. Driving your bow into an enemy's flank is devastating.
-const RAM_BASE = 1.5;
-const RAM_MAX = 2.6; // damage cap per ram
-const RAM_MIN_BOW = 0.35; // must be driving toward the victim (cos of bow angle)
-const RAM_SPEED_REF = 90; // px/s reference (≈ medium hull)
-const RAM_LEN_REF = 56; // px reference (≈ medium hull)
-const RAM_SELF = 0.1; // rammer takes 10% of the damage it deals
+// Ramming: you must hit with your BOW (the whole curved front counts). Bow
+// into an enemy's side or stern deals 3 hull damage and costs the rammer 1 in
+// return; bow-to-bow both ships take 3. Glancing side scrapes just shove apart.
+const RAM_DMG = 3; // dealt to the ship you spear
+const RAM_SELF_DMG = 1; // taken back by the rammer
+const RAM_BOW_COS = 0.35; // contact within ~70° of dead ahead counts as the bow
 const RAM_CD = 0.7; // s before the same ship can ram-damage again
 const MAX_PICKUPS = 9;
 const PICKUP_R = 15; // px
@@ -751,6 +749,11 @@ export class MpSession {
           this.wind,
           eye,
           this.mode === 'survival',
+          this.pickups,
+          {
+            dbl: this.buffs[i].doubleUntil > this.clock,
+            mg: this.buffs[i].mgUntil > this.clock || this.buffs[i].mgArmed,
+          },
         );
         p.turn = d.turn;
         p.fire = d.fire;
@@ -791,9 +794,9 @@ export class MpSession {
     if (this.phase === 'battle') {
       this.ships.forEach((ship, i) => {
         if (!ship.alive || !this.players[i].connected) return;
-        if (ship.depth > 0.15) return; // guns don't work underwater
         const b = this.buffs[i];
         const sub = ship.type === 'submarine';
+        if (ship.depth > 0.15 && !sub) return; // only subs can shoot from underwater
 
         // Machine gun: rapid continuous fire (torpedo stream for submarines).
         if (b.mgUntil > this.clock) {
@@ -831,14 +834,14 @@ export class MpSession {
     }
 
     for (const ball of this.balls) {
-      ball.update(dt);
+      ball.update(dt, WORLD_W, WORLD_H);
       // After the round is decided, in-flight shots fly on harmlessly — no more
       // damage or score changes, so the final board matches the declared winner.
       if (ball.spent || this.phase !== 'battle') continue;
       for (const ship of this.ships) {
         if (ship === ball.owner || !ship.alive) continue;
         if (ship.depth > SUB_IMMUNE) continue; // shots pass over a submerged sub
-        if (ship.containsPoint(ball.x, ball.y)) {
+        if (ship.containsPointWrapped(ball.x, ball.y, WORLD_W, WORLD_H)) {
           ball.spent = true;
           const si = this.ships.indexOf(ship);
           if (this.spawnUntil[si] > this.clock) {
@@ -982,8 +985,9 @@ export class MpSession {
         const B = this.ships[j];
         if (!B.alive || B.depth > SUB_IMMUNE) continue;
 
-        const dx = B.x - A.x;
-        const dy = B.y - A.y;
+        // Nearest-image delta so ramming works across the wrap seam too.
+        const dx = wrapDelta(B.x - A.x, WORLD_W);
+        const dy = wrapDelta(B.y - A.y, WORLD_H);
         const dist = Math.hypot(dx, dy) || 0.001;
         const contact = A.length * 0.42 + B.length * 0.42;
         if (dist >= contact) continue;
@@ -1008,12 +1012,19 @@ export class MpSession {
 
         if (this.ramCd[i] > 0 || this.ramCd[j] > 0) continue; // just separated recently
 
-        // Each ship deals ram damage by how bow-on and fast it is.
-        const dmgToB = this.ramDamage(A, nx, ny);
-        const dmgToA = this.ramDamage(B, -nx, -ny);
+        // Whose bow (the whole curved front) is driving into the other?
+        const aBow = Math.cos(A.heading) * nx + Math.sin(A.heading) * ny >= RAM_BOW_COS;
+        const bBow = Math.cos(B.heading) * -nx + Math.sin(B.heading) * -ny >= RAM_BOW_COS;
         let hit = false;
-        if (dmgToB > 0 && this.applyRam(i, j, dmgToB)) hit = true;
-        if (dmgToA > 0 && this.applyRam(j, i, dmgToA)) hit = true;
+        if (aBow && bBow) {
+          // Bow-to-bow: both hulls take the full ram, no extra return damage.
+          if (this.applyRam(i, j, RAM_DMG, 0)) hit = true;
+          if (this.applyRam(j, i, RAM_DMG, 0)) hit = true;
+        } else if (aBow) {
+          if (this.applyRam(i, j, RAM_DMG, RAM_SELF_DMG)) hit = true;
+        } else if (bBow) {
+          if (this.applyRam(j, i, RAM_DMG, RAM_SELF_DMG)) hit = true;
+        }
         if (hit) {
           this.pendingEvents.push({ e: 'hit', x: (A.x + B.x) / 2, y: (A.y + B.y) / 2 });
           this.ramCd[i] = RAM_CD;
@@ -1023,18 +1034,8 @@ export class MpSession {
     }
   }
 
-  /** Damage `attacker` inflicts by ramming, given the unit vector toward the victim. */
-  private ramDamage(attacker: Ship, nx: number, ny: number): number {
-    const bowOn = Math.cos(attacker.heading) * nx + Math.sin(attacker.heading) * ny;
-    if (bowOn < RAM_MIN_BOW) return 0; // a glancing scrape does nothing
-    const speed = attacker.speed * attacker.boostFactor;
-    const dmg =
-      RAM_BASE * bowOn * (speed / RAM_SPEED_REF) * (attacker.length / RAM_LEN_REF);
-    return Math.min(RAM_MAX, dmg);
-  }
-
   /** Apply a ram from ship `ai` to `vi`; returns true if damage landed. */
-  private applyRam(ai: number, vi: number, dmg: number): boolean {
+  private applyRam(ai: number, vi: number, dmg: number, selfDmg: number): boolean {
     const attacker = this.ships[ai];
     const victim = this.ships[vi];
     if (this.spawnUntil[vi] > this.clock) return false; // spawn-protected
@@ -1046,8 +1047,8 @@ export class MpSession {
     victim.takeHit(dmg);
     this.scores[ai].damage += before - victim.health;
     if (before > 0 && victim.health <= 0) this.scores[ai].kills++;
-    // The rammer takes a small share back (unless shielded).
-    if (attacker.shield <= 0) attacker.takeHit(dmg * RAM_SELF);
+    // The rammer pays the return damage (unless shielded).
+    if (selfDmg > 0 && attacker.shield <= 0) attacker.takeHit(selfDmg);
     return true;
   }
 
@@ -1517,6 +1518,7 @@ export class MpSession {
       // A submerged submarine is invisible to everyone but its own captain.
       if (i !== this.you && ship.depth > SUB_HIDDEN) return;
       if (ship.sinkProgress < 1) this.drawShipBuffs(ship, i); // aura under the hull
+      this.setGunFlags(ship, i); // barrels show where the next broadside goes
       ship.drawWrapped(ctx, WORLD_W, WORLD_H); // ghost across edges = seamless wrap
       if (ship.sinkProgress < 1) {
         this.drawShipHealth(ship);
@@ -1615,6 +1617,17 @@ export class MpSession {
       ctx.fillStyle = '#fff';
       ctx.fillText(meta.label, p.x, yy + PICKUP_R + 3);
     }
+  }
+
+  /** Aim the drawn gun barrels: the side the next broadside would leave from,
+   *  or both sides while the double-broadside power-up is running. Guests can
+   *  compute this too — it only needs ship positions. */
+  private setGunFlags(ship: Ship, i: number) {
+    if (ship.type === 'submarine') return; // its bow tube is always drawn
+    const dbl = this.buffView[i]?.dbl ?? false;
+    const side = this.chooseSide(ship);
+    ship.gunStarboard = dbl || side === 1;
+    ship.gunPort = dbl || side === -1;
   }
 
   /** Auras drawn beneath a ship: spawn shield, power-up shield, speed streak. */
