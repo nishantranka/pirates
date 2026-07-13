@@ -301,15 +301,6 @@ export class Game {
     p.reload = PLAYER_RELOAD;
   }
 
-  /** Point the drawn gun barrels at the side that fireBroadside would pick. */
-  private setGunFlags(shooter: Ship, target: Ship) {
-    if (shooter.type === 'submarine') return; // bow tube is always drawn
-    const bearing = Math.atan2(target.y - shooter.y, target.x - shooter.x);
-    const side = Math.sin(bearing - shooter.heading) >= 0 ? 1 : -1;
-    shooter.gunStarboard = side === 1;
-    shooter.gunPort = side === -1;
-  }
-
   private fireBroadside(shooter: Ship, target: Ship, reload: number) {
     const bearing = Math.atan2(target.y - shooter.y, target.x - shooter.x);
     const side = Math.sin(bearing - shooter.heading) >= 0 ? 1 : -1;
@@ -342,9 +333,6 @@ export class Game {
 
     const ctx = this.ctx;
     for (const ball of this.cannonballs) ball.draw(ctx);
-    // Gun barrels show which side the next broadside leaves from.
-    this.setGunFlags(this.player, this.enemy);
-    this.setGunFlags(this.enemy, this.player);
     this.player.drawWrapped(ctx, this.viewW, this.viewH);
     this.enemy.drawWrapped(ctx, this.viewW, this.viewH);
 
