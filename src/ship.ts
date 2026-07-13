@@ -178,10 +178,6 @@ export class Ship {
     const w = this.width;
 
     if (this.type === 'submarine') {
-      // Bow torpedo tube — the sub always fires straight ahead.
-      ctx.fillStyle = 'rgba(20, 24, 28, 0.85)';
-      ctx.fillRect(l / 2 - 2, -1.6, 8, 3.2);
-
       // Cigar hull with a rounded bow and tapered stern.
       ctx.beginPath();
       ctx.moveTo(l / 2, 0);
@@ -196,6 +192,16 @@ export class Ship {
       ctx.lineWidth = 2;
       ctx.stroke();
 
+      // Bow torpedo tube poking out ahead — the sub always fires straight
+      // forward, and the light outline keeps it readable on any hull color.
+      ctx.fillStyle = '#20262c';
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.6)';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.rect(l / 2 - 3, -1.8, 10, 3.6);
+      ctx.fill();
+      ctx.stroke();
+
       // Conning tower + periscope dot.
       ctx.fillStyle = 'rgba(0, 0, 0, 0.35)';
       ctx.beginPath();
@@ -208,20 +214,6 @@ export class Ship {
 
       ctx.restore();
       return;
-    }
-
-    // Gun barrels poking out of the side(s) the next broadside fires from —
-    // drawn under the hull so only the muzzles show past the gunwale.
-    ctx.fillStyle = 'rgba(20, 24, 28, 0.85)';
-    const gunSides: number[] = [];
-    if (this.gunStarboard) gunSides.push(1);
-    if (this.gunPort) gunSides.push(-1);
-    for (const s of gunSides) {
-      for (let i = 0; i < this.guns; i++) {
-        const gx = (this.guns === 1 ? 0 : i / (this.guns - 1) - 0.5) * (l / 2);
-        const y0 = s > 0 ? w * 0.22 : -w * 0.66;
-        ctx.fillRect(gx - 1.2, y0, 2.4, w * 0.44);
-      }
     }
 
     // Hull: pointed bow (+x), flat stern.
@@ -253,6 +245,26 @@ export class Ship {
       ctx.rect(mastX - 3, -w * 0.75, 6, w * 1.5);
       ctx.fill();
       ctx.stroke();
+    }
+
+    // Gun barrels on the side(s) the next broadside fires from, drawn on top
+    // of the deck and poking well past the gunwale; the light outline keeps
+    // them readable on any hull color and at the letterboxed multiplayer scale.
+    const gunSides: number[] = [];
+    if (this.gunStarboard) gunSides.push(1);
+    if (this.gunPort) gunSides.push(-1);
+    ctx.fillStyle = '#20262c';
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.6)';
+    ctx.lineWidth = 0.9;
+    for (const s of gunSides) {
+      for (let i = 0; i < this.guns; i++) {
+        const gx = (this.guns === 1 ? 0 : i / (this.guns - 1) - 0.5) * (l / 2);
+        const y0 = s > 0 ? w * 0.12 : -w * 0.74;
+        ctx.beginPath();
+        ctx.rect(gx - 1.4, y0, 2.8, w * 0.62);
+        ctx.fill();
+        ctx.stroke();
+      }
     }
 
     ctx.restore();
