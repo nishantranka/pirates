@@ -201,7 +201,6 @@ interface Buff {
   speedUntil: number;
   mgUntil: number;
   mgArmed: boolean; // machine gun picked up, waiting for the next trigger shot
-  mgSide: 1 | -1;
 }
 
 /** What guests need to render a ship's power-up state. */
@@ -671,7 +670,6 @@ export class MpSession {
       speedUntil: 0,
       mgUntil: 0,
       mgArmed: false,
-      mgSide: 1,
     }));
     this.buffView = this.spawns.map(() => ({ shield: 0, spd: false, dbl: false, mg: false, inv: true }));
     this.scores = this.spawns.map(() => ({ time: 0, damage: 0, kills: 0 }));
@@ -802,7 +800,7 @@ export class MpSession {
         if (b.mgUntil > this.clock) {
           if (ship.reload <= 0) {
             if (sub) this.fireTorpedo(ship, MG_RELOAD_SUB, 0);
-            else this.fireSide(ship, b.mgSide, MG_RELOAD);
+            else this.fireSide(ship, 1, MG_RELOAD);
             this.pendingEvents.push({ e: 'fire' });
           }
           return;
@@ -813,10 +811,9 @@ export class MpSession {
         if (b.mgArmed) {
           // The trigger shot arms 5 s of machine-gun fire.
           b.mgArmed = false;
-          b.mgSide = this.chooseSide(ship);
           b.mgUntil = this.clock + MG_DURATION;
           if (sub) this.fireTorpedo(ship, MG_RELOAD_SUB, 0);
-          else this.fireSide(ship, b.mgSide, MG_RELOAD);
+          else this.fireSide(ship, 1, MG_RELOAD);
         } else if (b.doubleUntil > this.clock) {
           if (sub) {
             // Double for a submarine: a two-torpedo spread off the bow.
@@ -906,23 +903,6 @@ export class MpSession {
     this.tickEffects(dt);
   }
 
-  /** Nearest living enemy's side (which way to point the broadside). */
-  private chooseSide(shooter: Ship): 1 | -1 {
-    let side: 1 | -1 = 1;
-    let best = Infinity;
-    for (const other of this.ships) {
-      if (other === shooter || !other.alive) continue;
-      if (other.depth > SUB_HIDDEN) continue; // can't aim at what you can't see
-      const d = Math.hypot(other.x - shooter.x, other.y - shooter.y);
-      if (d < best) {
-        best = d;
-        const bearing = Math.atan2(other.y - shooter.y, other.x - shooter.x);
-        side = Math.sin(bearing - shooter.heading) >= 0 ? 1 : -1;
-      }
-    }
-    return side;
-  }
-
   /** Fire one broadside off the given side, setting the reload timer. */
   private fireSide(shooter: Ship, side: 1 | -1, reload: number) {
     const dir = shooter.heading + (side * Math.PI) / 2;
@@ -946,7 +926,7 @@ export class MpSession {
   }
 
   private fireBroadside(shooter: Ship) {
-    this.fireSide(shooter, this.chooseSide(shooter), RELOAD);
+    this.fireSide(shooter, 1, RELOAD); // guns live on the starboard rail
   }
 
   /** Double-broadside power-up: fire both sides at once. */

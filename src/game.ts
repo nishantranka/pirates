@@ -261,11 +261,11 @@ export class Game {
       // Submarines can launch torpedoes surfaced or submerged.
       if (this.input.isDown('Space') && this.player.reload <= 0) {
         if (this.player.type === 'submarine') this.fireTorpedo();
-        else this.fireBroadside(this.player, this.enemy, PLAYER_RELOAD);
+        else this.fireBroadside(this.player, PLAYER_RELOAD);
         this.onCannonFire?.();
       }
       if (!playerHidden && wantsToFire(this.enemy, this.player, aiOpts) && this.enemy.reload <= 0) {
-        this.fireBroadside(this.enemy, this.player, diff.reload);
+        this.fireBroadside(this.enemy, diff.reload);
       }
     }
 
@@ -301,10 +301,9 @@ export class Game {
     p.reload = PLAYER_RELOAD;
   }
 
-  private fireBroadside(shooter: Ship, target: Ship, reload: number) {
-    const bearing = Math.atan2(target.y - shooter.y, target.x - shooter.x);
-    const side = Math.sin(bearing - shooter.heading) >= 0 ? 1 : -1;
-    const dir = shooter.heading + (side * Math.PI) / 2;
+  private fireBroadside(shooter: Ship, reload: number) {
+    // Guns live on the starboard rail — every broadside fires that way.
+    const dir = shooter.heading + Math.PI / 2;
 
     const fx = Math.cos(shooter.heading);
     const fy = Math.sin(shooter.heading);

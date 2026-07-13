@@ -30,7 +30,7 @@ function aimPoint(self: Ship, target: Ship, opts: AiOptions): { x: number; y: nu
   };
 }
 
-/** Chase the target from afar; once close, turn sideways so the broadside bears. */
+/** Chase the target from afar; once close, turn so the starboard guns bear. */
 export function decideTurn(self: Ship, target: Ship, opts: AiOptions): Turn {
   const aim = aimPoint(self, target, opts);
   const bearing = Math.atan2(aim.y - self.y, aim.x - self.x);
@@ -38,12 +38,8 @@ export function decideTurn(self: Ship, target: Ship, opts: AiOptions): Turn {
 
   let desired = bearing;
   if (dist < BROADSIDE_RANGE) {
-    const port = bearing - Math.PI / 2;
-    const starboard = bearing + Math.PI / 2;
-    desired =
-      Math.abs(angleDiff(port, self.heading)) < Math.abs(angleDiff(starboard, self.heading))
-        ? port
-        : starboard;
+    // Guns are on the starboard rail only: put the target 90° to starboard.
+    desired = bearing - Math.PI / 2;
   } else if (opts.windAware) {
     // Chasing dead upwind means crawling at 40% speed; steer along the
     // nearest edge of the slow cone instead and keep the sails drawing.
@@ -60,12 +56,12 @@ export function decideTurn(self: Ship, target: Ship, opts: AiOptions): Turn {
   return 0;
 }
 
-/** Fire when the aim point is in range and roughly 90° off the bow (broadside bears). */
+/** Fire when the aim point is in range and ~90° to starboard (where the guns are). */
 export function wantsToFire(self: Ship, target: Ship, opts: AiOptions): boolean {
   const aim = aimPoint(self, target, opts);
   const dist = Math.hypot(aim.x - self.x, aim.y - self.y);
   if (dist > FIRE_RANGE) return false;
   const bearing = Math.atan2(aim.y - self.y, aim.x - self.x);
-  const offBow = Math.abs(angleDiff(bearing, self.heading));
+  const offBow = angleDiff(bearing, self.heading);
   return Math.abs(offBow - Math.PI / 2) < FIRE_CONE;
 }
