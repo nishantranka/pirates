@@ -2,7 +2,7 @@ import { decideTurn, wantsToFire } from './ai';
 import { Cannonball } from './cannonball';
 import { Explosion } from './explosion';
 import type { Input } from './input';
-import { DIVE, SAIL_TYPES, Ship, YOU_COLOR, type ShipTypeName, type Turn } from './ship';
+import { DIVE, RAM, SAIL_TYPES, Ship, wrapDelta, YOU_COLOR, type ShipTypeName, type Turn } from './ship';
 import { Wind } from './wind';
 
 const MAX_DT = 0.05;
@@ -51,6 +51,7 @@ export class Game {
   private lastTime = 0;
   private gameOverFired = false;
   private diveCharge: number = DIVE.max; // player submarine dive charge
+  private ramCd = 0; // s until this pair of hulls can ram-damage again
 
   /** Set by main.ts; called once when the battle ends (won = enemy sunk). */
   onGameOver: ((won: boolean) => void) | null = null;
@@ -133,6 +134,7 @@ export class Game {
     this.player = new Ship(w * 0.3, h * 0.6, -Math.PI / 4, PLAYER_COLOR, playerType);
     this.enemy = new Ship(w * 0.7, h * 0.3, Math.PI * 0.75, ENEMY_COLOR, resolvedEnemy);
     this.diveCharge = DIVE.max;
+    this.ramCd = 0;
     this.cannonballs = [];
     this.explosions = [];
     this.wind = new Wind();
@@ -157,6 +159,7 @@ export class Game {
     const heading = Math.atan2(this.player.y - ey, this.player.x - ex);
     this.enemy = new Ship(ex, ey, heading, ENEMY_COLOR, type);
     this.difficulty = difficulty;
+    this.ramCd = 0;
     this.cannonballs = [];
     this.explosions = [];
     this.gameOverFired = false;
@@ -257,6 +260,8 @@ export class Game {
       this.wind.speedFactor(this.enemy.heading),
     );
 
+    this.updateRam(dt, w, h);
+
     if (!this.over) {
       // Submarines can launch torpedoes surfaced or submerged.
       if (this.input.isDown('Space') && this.player.reload <= 0) {
@@ -284,6 +289,57 @@ export class Game {
 
     for (const ex of this.explosions) ex.update(dt);
     this.explosions = this.explosions.filter((ex) => !ex.done);
+  }
+
+  /** Ship-vs-ship contact — same bow-ram rules as multiplayer (see RAM in
+   *  ship.ts): hulls shove apart, and whoever's bow is driving in deals the
+   *  ram damage. Glancing side scrapes just separate. */
+  private updateRam(dt: number, w: number, h: number) {
+    this.ramCd = Math.max(0, this.ramCd - dt);
+
+    const A = this.player;
+    const B = this.enemy;
+    if (!A.alive || !B.alive) return;
+    if (A.depth > DIVE.immune || B.depth > DIVE.immune) return; // sub passes under
+
+    // Nearest-image delta so ramming works across the wrap seam too.
+    const dx = wrapDelta(B.x - A.x, w);
+    const dy = wrapDelta(B.y - A.y, h);
+    const dist = Math.hypot(dx, dy) || 0.001;
+    const contact = A.length * 0.42 + B.length * 0.42;
+    if (dist >= contact) return;
+
+    // Shove the hulls apart so they don't interpenetrate.
+    const nx = dx / dist;
+    const ny = dy / dist;
+    const push = (contact - dist) * 0.5;
+    A.x -= nx * push;
+    A.y -= ny * push;
+    B.x += nx * push;
+    B.y += ny * push;
+
+    if (this.ramCd > 0) return; // just separated recently
+
+    // Whose bow (the whole curved front) is driving into the other?
+    const aBow = Math.cos(A.heading) * nx + Math.sin(A.heading) * ny >= RAM.bowCos;
+    const bBow = Math.cos(B.heading) * -nx + Math.sin(B.heading) * -ny >= RAM.bowCos;
+    if (aBow && bBow) {
+      // Bow-to-bow: both hulls take the full ram, no extra return damage.
+      A.takeHit(RAM.dmg);
+      B.takeHit(RAM.dmg);
+    } else if (aBow) {
+      B.takeHit(RAM.dmg);
+      A.takeHit(RAM.selfDmg);
+    } else if (bBow) {
+      A.takeHit(RAM.dmg);
+      B.takeHit(RAM.selfDmg);
+    } else {
+      return; // glancing scrape — no damage, no cooldown
+    }
+
+    this.ramCd = RAM.cd;
+    this.explosions.push(new Explosion(A.x + nx * (dist / 2), A.y + ny * (dist / 2)));
+    this.onHit?.();
   }
 
   /** Player submarine: a single straight-ahead bow torpedo. */
