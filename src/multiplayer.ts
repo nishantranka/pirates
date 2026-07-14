@@ -33,7 +33,7 @@ import {
   type ShipSpawn,
   type ShipState,
 } from './net';
-import { DIVE, SAIL_TYPES, Ship, SHIP_TYPES, wrapDelta, YOU_COLOR, type ShipTypeName, type Turn } from './ship';
+import { DIVE, RAM, SAIL_TYPES, Ship, SHIP_TYPES, wrapDelta, YOU_COLOR, type ShipTypeName, type Turn } from './ship';
 import { Wind } from './wind';
 import type { DataConnection } from 'peerjs';
 
@@ -67,13 +67,11 @@ const SUB_IMMUNE = DIVE.immune;
 const SUB_HIDDEN = DIVE.hidden;
 const MG_RELOAD_SUB = 0.35; // rapid-fire cadence for torpedoes
 
-// Ramming: you must hit with your BOW (the whole curved front counts). Bow
-// into an enemy's side or stern deals 3 hull damage and costs the rammer 1 in
-// return; bow-to-bow both ships take 3. Glancing side scrapes just shove apart.
-const RAM_DMG = 3; // dealt to the ship you spear
-const RAM_SELF_DMG = 1; // taken back by the rammer
-const RAM_BOW_COS = 0.35; // contact within ~70° of dead ahead counts as the bow
-const RAM_CD = 0.7; // s before the same ship can ram-damage again
+// Ramming rules are shared with practice mode via RAM in ship.ts.
+const RAM_DMG = RAM.dmg;
+const RAM_SELF_DMG = RAM.selfDmg;
+const RAM_BOW_COS = RAM.bowCos;
+const RAM_CD = RAM.cd;
 const MAX_PICKUPS = 9;
 const PICKUP_R = 15; // px
 const PICKUP_TTL = 20; // s before an uncollected pickup relocates

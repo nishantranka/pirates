@@ -38,6 +38,17 @@ export const DIVE = {
   hidden: 0.5, // depth beyond which enemies can't see you
 } as const;
 
+/** Ramming tuning, shared by practice (game.ts) and multiplayer: you must hit
+ *  with your BOW (the whole curved front counts). Bow into an enemy's side or
+ *  stern deals `dmg` and costs the rammer `selfDmg` in return; bow-to-bow both
+ *  ships take `dmg`. Glancing side scrapes just shove the hulls apart. */
+export const RAM = {
+  dmg: 3, // dealt to the ship you spear
+  selfDmg: 1, // taken back by the rammer
+  bowCos: 0.35, // contact within ~70° of dead ahead counts as the bow
+  cd: 0.7, // s before the same ship can ram-damage again
+} as const;
+
 const SINK_DURATION = 1.5; // s to fade out after health hits 0
 
 /** Shortest signed delta from 0 to d on a wrapping axis of the given size. */
