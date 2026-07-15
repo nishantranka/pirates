@@ -49,6 +49,24 @@ export const RAM = {
   cd: 0.7, // s before the same ship can ram-damage again
 } as const;
 
+/** Fore-aft deck offsets of each broadside gun. The battery sits between
+ *  -0.12·length and +0.28·length — shifted toward the bow so it clears the
+ *  stern cabin. Shared by the renderer and the cannonball spawn code so shots
+ *  leave exactly where the barrels are drawn. */
+export function gunOffsets(guns: number, length: number): number[] {
+  if (guns <= 1) return [length * 0.08];
+  const out: number[] = [];
+  for (let i = 0; i < guns; i++) out.push(length * (-0.12 + (0.4 * i) / (guns - 1)));
+  return out;
+}
+
+/** How far a gun muzzle tip reaches out from the centreline. The barrels are
+ *  long — they clear the beam entirely — with an absolute floor so guns stay
+ *  visible on the smallest hulls. */
+export function muzzleReach(width: number): number {
+  return width * 0.46 + Math.max(8, width * 0.55);
+}
+
 const SINK_DURATION = 1.5; // s to fade out after health hits 0
 
 /** Shortest signed delta from 0 to d on a wrapping axis of the given size. */
@@ -226,51 +244,106 @@ export class Ship {
       return;
     }
 
-    // Hull: pointed bow (+x), flat stern.
-    ctx.beginPath();
-    ctx.moveTo(l / 2, 0);
-    ctx.quadraticCurveTo(l / 6, -w / 2, -l / 2, -w / 2.6);
-    ctx.lineTo(-l / 2, w / 2.6);
-    ctx.quadraticCurveTo(l / 6, w / 2, l / 2, 0);
-    ctx.closePath();
-    ctx.fillStyle = this.hullColor;
-    ctx.fill();
-    ctx.strokeStyle = 'rgba(0, 0, 0, 0.45)';
+    // ── v2 ship silhouette (approved mockup): flat transom stern, long raked
+    // bow, bowsprit, two-tone deck, plank lines, stern cabin, and chunky
+    // white-barreled guns on the starboard rail. Everything is a fraction of
+    // hull length l / beam w so the three sizes stay proportional.
+
+    // Stern wake V: two short trailing lines off the transom.
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.3)';
     ctx.lineWidth = 2;
-    ctx.stroke();
-
-    // Deck line.
-    ctx.beginPath();
-    ctx.moveTo(l / 2 - 6, 0);
-    ctx.lineTo(-l / 2 + 4, 0);
-    ctx.strokeStyle = 'rgba(0, 0, 0, 0.25)';
-    ctx.lineWidth = 1;
-    ctx.stroke();
-
-    // Square sails: two masts, sails set across the hull.
-    ctx.fillStyle = '#f3ead7';
-    ctx.strokeStyle = 'rgba(0, 0, 0, 0.3)';
-    for (const mastX of [l / 6, -l / 5]) {
+    ctx.lineCap = 'round';
+    for (const s of [-1, 1]) {
       ctx.beginPath();
-      ctx.rect(mastX - 3, -w * 0.75, 6, w * 1.5);
-      ctx.fill();
+      ctx.moveTo(-l * 0.52, s * w * 0.24);
+      ctx.lineTo(-l * 0.72, s * w * 0.4);
       ctx.stroke();
     }
 
-    // Cannon muzzles: slim rounded stubs on the STARBOARD rail only — that's
-    // the one side every broadside fires from, and it never changes. While
-    // double broadside runs, muzzles appear on both sides, longer and gold.
-    ctx.strokeStyle = this.gunHighlight ? '#ffd75e' : 'rgba(22, 27, 33, 0.8)';
-    ctx.lineWidth = this.gunHighlight ? 3 : 2.2;
-    ctx.lineCap = 'round';
-    const reach = this.gunHighlight ? w * 0.74 : w * 0.62;
+    // Bowsprit: a single spar reaching past the bow tip.
+    ctx.strokeStyle = '#d8c9a3';
+    ctx.lineWidth = Math.max(2, w * 0.11);
+    ctx.beginPath();
+    ctx.moveTo(l * 0.46, 0);
+    ctx.lineTo(l * 0.62, 0);
+    ctx.stroke();
+
+    // Hull: flat (slightly curved) transom at the stern, widest just aft of
+    // midship, long raked taper to a pointed bow. Traced twice — full size
+    // for the hull, inset for the lighter deck.
+    const trace = (k: number) => {
+      ctx.beginPath();
+      ctx.moveTo(-l * 0.5 * k, -w * 0.35 * k);
+      ctx.bezierCurveTo(-l * 0.53 * k, -w * 0.15 * k, -l * 0.53 * k, w * 0.15 * k, -l * 0.5 * k, w * 0.35 * k);
+      ctx.bezierCurveTo(-l * 0.34 * k, w * 0.5 * k, -l * 0.12 * k, w * 0.5 * k, l * 0.06 * k, w * 0.43 * k);
+      ctx.bezierCurveTo(l * 0.26 * k, w * 0.35 * k, l * 0.4 * k, w * 0.18 * k, l * 0.5 * k, 0);
+      ctx.bezierCurveTo(l * 0.4 * k, -w * 0.18 * k, l * 0.26 * k, -w * 0.35 * k, l * 0.06 * k, -w * 0.43 * k);
+      ctx.bezierCurveTo(-l * 0.12 * k, -w * 0.5 * k, -l * 0.34 * k, -w * 0.5 * k, -l * 0.5 * k, -w * 0.35 * k);
+      ctx.closePath();
+    };
+    trace(1);
+    ctx.fillStyle = this.hullColor;
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(0, 0, 0, 0.5)';
+    ctx.lineWidth = 2.5;
+    ctx.lineJoin = 'round';
+    ctx.stroke();
+    trace(0.78); // deck: same hue, lifted
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.16)';
+    ctx.fill();
+
+    // Plank lines along the deck, converging slightly toward the bow.
+    ctx.strokeStyle = 'rgba(0, 0, 0, 0.2)';
+    ctx.lineWidth = 1.5;
+    for (const s of [-1, 1]) {
+      ctx.beginPath();
+      ctx.moveTo(-l * 0.36, s * w * 0.14);
+      ctx.lineTo(l * 0.36, s * w * 0.09);
+      ctx.stroke();
+    }
+
+    // Stern cabin: a raised block with a lighter roof inset.
+    ctx.beginPath();
+    ctx.roundRect(-l * 0.42, -w * 0.25, l * 0.21, w * 0.5, 2.5);
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.22)';
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(0, 0, 0, 0.5)';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.roundRect(-l * 0.385, -w * 0.15, l * 0.14, w * 0.3, 2);
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.28)';
+    ctx.fill();
+
+    // Guns: dark base block on the deck, long white barrel crossing the rail,
+    // dark muzzle cap at the tip. STARBOARD only — the one side every
+    // broadside fires from. During double broadside they appear on both
+    // rails with gold barrels. Positions match the cannonball spawn points
+    // (gunOffsets / muzzleReach).
+    const bw = Math.max(3, w * 0.15); // barrel width
+    const baseW = Math.max(4.5, w * 0.24);
+    const baseH = Math.max(3.5, w * 0.18);
+    const reach = muzzleReach(w);
+    const capL = Math.max(2.5, (reach - w * 0.46) * 0.22);
     for (const s of this.gunHighlight ? [1, -1] : [1]) {
-      for (let i = 0; i < this.guns; i++) {
-        const gx = (this.guns === 1 ? 0 : i / (this.guns - 1) - 0.5) * (l / 2);
+      for (const gx of gunOffsets(this.guns, l)) {
         ctx.beginPath();
-        ctx.moveTo(gx, s * w * 0.34);
-        ctx.lineTo(gx, s * reach);
+        ctx.roundRect(gx - baseW / 2, s * w * 0.4 - baseH / 2, baseW, baseH, 1.5);
+        ctx.fillStyle = '#22262c';
+        ctx.fill();
+        const y0 = Math.min(s * w * 0.42, s * reach);
+        ctx.beginPath();
+        ctx.roundRect(gx - bw / 2, y0, bw, Math.abs(reach - w * 0.42), 1.2);
+        ctx.fillStyle = this.gunHighlight ? '#ffd75e' : '#f5f0e2';
+        ctx.fill();
+        ctx.strokeStyle = this.gunHighlight ? 'rgba(122, 84, 0, 0.9)' : '#20344a';
+        ctx.lineWidth = 1;
         ctx.stroke();
+        const yc = s > 0 ? reach - capL : -reach;
+        ctx.beginPath();
+        ctx.roundRect(gx - (bw + 1.5) / 2, yc, bw + 1.5, capL, 1);
+        ctx.fillStyle = '#2b2f36';
+        ctx.fill();
       }
     }
 

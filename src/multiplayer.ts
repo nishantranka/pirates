@@ -33,7 +33,7 @@ import {
   type ShipSpawn,
   type ShipState,
 } from './net';
-import { DIVE, RAM, SAIL_TYPES, Ship, SHIP_TYPES, wrapDelta, YOU_COLOR, type ShipTypeName, type Turn } from './ship';
+import { DIVE, gunOffsets, muzzleReach, RAM, SAIL_TYPES, Ship, SHIP_TYPES, wrapDelta, YOU_COLOR, type ShipTypeName, type Turn } from './ship';
 import { Wind } from './wind';
 import type { DataConnection } from 'peerjs';
 
@@ -909,12 +909,12 @@ export class MpSession {
     const sx = Math.cos(dir);
     const sy = Math.sin(dir);
 
-    for (let i = 0; i < shooter.guns; i++) {
-      const along = (i / (shooter.guns - 1) - 0.5) * (shooter.length / 2);
+    const reach = muzzleReach(shooter.width);
+    for (const along of gunOffsets(shooter.guns, shooter.length)) {
       this.balls.push(
         new Cannonball(
-          shooter.x + fx * along + sx * (shooter.width / 2),
-          shooter.y + fy * along + sy * (shooter.width / 2),
+          shooter.x + fx * along + sx * reach,
+          shooter.y + fy * along + sy * reach,
           dir,
           shooter,
         ),
