@@ -14,24 +14,31 @@ try {
   /* localStorage may be unavailable (e.g. private mode) */
 }
 
-// The source clips are loud; play them well below full volume.
-const SFX_VOLUME = 0.35;
-
 // Preload a sound and return a function that plays a fresh clone each call
 // (cloning lets multiple instances overlap, e.g. several explosions at once).
-function makeSound(url: string): () => void {
+// The source clips are loud, so each is played well below full volume; `rate`
+// re-pitches a clip so one file can serve two distinct cues (preservesPitch off
+// makes the rate change the pitch, not just the tempo).
+function makeSound(url: string, volume: number, rate = 1): () => void {
   const audio = new Audio(url);
   audio.preload = 'auto';
   return () => {
     if (muted) return;
     const clone = audio.cloneNode() as HTMLAudioElement;
-    clone.volume = SFX_VOLUME;
+    clone.volume = volume;
+    if (rate !== 1) {
+      (clone as HTMLAudioElement & { preservesPitch?: boolean }).preservesPitch = false;
+      clone.playbackRate = rate;
+    }
     clone.play().catch(() => {});
   };
 }
 
-const playCannonFire = makeSound('./cannon.mp3');
-const playExplosion = makeSound('./explosion.mp3');
+// Three player-centric cues. Firing happens most often, so it's the quietest;
+// taking a hit is the loudest and lowest-pitched so it clearly reads as danger.
+const playFire = makeSound('./cannon.mp3', 0.2);
+const playMyHit = makeSound('./explosion.mp3', 0.28, 1.18);
+const playGetHit = makeSound('./explosion.mp3', 0.42, 0.78);
 
 // ── Canvas setup ──────────────────────────────────────────────────────────────
 
@@ -53,8 +60,8 @@ function resize() {
 
 const input = new Input();
 const game = new Game(ctx, input);
-game.onCannonFire = playCannonFire;
-game.onHit = playExplosion;
+game.onCannonFire = playFire;
+game.onHit = (youWereHit: boolean) => (youWereHit ? playGetHit() : playMyHit());
 game.start();
 // Dev-only hook so E2E tests can observe practice mode; stripped in prod.
 if (import.meta.env.DEV) (window as unknown as { __game: Game }).__game = game;
@@ -548,8 +555,9 @@ mpCreateBtn.addEventListener('click', () => {
   mpCreateBtn.disabled = true;
   mpJoinBtn.disabled = true;
   mp = MpSession.host(mpNameInput.value, ctx, input, mpCallbacks(), {
-    fire: playCannonFire,
-    hit: playExplosion,
+    fire: playFire,
+    myHit: playMyHit,
+    getHit: playGetHit,
   });
 });
 
@@ -565,8 +573,9 @@ mpJoinBtn.addEventListener('click', () => {
   mpCreateBtn.disabled = true;
   mpJoinBtn.disabled = true;
   mp = MpSession.join(code, mpNameInput.value, ctx, input, mpCallbacks(), {
-    fire: playCannonFire,
-    hit: playExplosion,
+    fire: playFire,
+    myHit: playMyHit,
+    getHit: playGetHit,
   });
 });
 
