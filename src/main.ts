@@ -5,13 +5,17 @@ import { CODE_LENGTH, type LobbyPlayerInfo, type MpMode } from './net';
 import { SAIL_TYPES, SHIP_TYPES, type ShipTypeName } from './ship';
 import './style.css';
 
-// Sound on/off, remembered across sessions.
-let muted = false;
+// Sound on/off, remembered across sessions. OFF by default — audio is opt-in;
+// only an explicit unmute ('0') turns it on.
+let muted = true;
 try {
-  muted = localStorage.getItem('pirates-muted') === '1';
+  muted = localStorage.getItem('pirates-muted') !== '0';
 } catch {
   /* localStorage may be unavailable (e.g. private mode) */
 }
+
+// The source clips are loud; play them well below full volume.
+const SFX_VOLUME = 0.35;
 
 // Preload a sound and return a function that plays a fresh clone each call
 // (cloning lets multiple instances overlap, e.g. several explosions at once).
@@ -21,6 +25,7 @@ function makeSound(url: string): () => void {
   return () => {
     if (muted) return;
     const clone = audio.cloneNode() as HTMLAudioElement;
+    clone.volume = SFX_VOLUME;
     clone.play().catch(() => {});
   };
 }
