@@ -67,9 +67,12 @@ export interface BallState {
   tp?: boolean; // torpedo (rendered differently)
 }
 
+// `by`/`on` are ship indices so each client can play sound only for events it's
+// part of (fired by me, or landed on me). -1 means "no ship" (e.g. running
+// aground, or a disconnect scuttle).
 export type GameEvent =
-  | { e: 'fire' }
-  | { e: 'hit'; x: number; y: number }
+  | { e: 'fire'; by: number }
+  | { e: 'hit'; x: number; y: number; by: number; on: number }
   | { e: 'splash'; x: number; y: number }
   | { e: 'grab'; x: number; y: number; p: PickupType }
   | { e: 'block'; x: number; y: number };

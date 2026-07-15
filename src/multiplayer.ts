@@ -287,8 +287,9 @@ export interface MpCallbacks {
 }
 
 interface Sounds {
-  fire: () => void;
-  hit: () => void;
+  fire: () => void; // you fired
+  myHit: () => void; // your shot/ram landed on someone
+  getHit: () => void; // you took a hit
 }
 
 export class MpSession {
@@ -603,7 +604,7 @@ export class MpSession {
       const ship = this.ships[idx];
       if (ship && ship.alive) {
         while (ship.alive) ship.takeHit();
-        this.pendingEvents.push({ e: 'hit', x: ship.x, y: ship.y });
+        this.pendingEvents.push({ e: 'hit', x: ship.x, y: ship.y, by: -1, on: idx });
       }
     }
   }
@@ -778,7 +779,7 @@ export class MpSession {
       // (Spawn-protected ships are unsinkable for their grace period.)
       if (ship.alive && this.spawnUntil[i] <= this.clock && shipHitsIsland(this.islands, ship)) {
         while (ship.alive) ship.takeHit();
-        this.pendingEvents.push({ e: 'hit', x: ship.x, y: ship.y });
+        this.pendingEvents.push({ e: 'hit', x: ship.x, y: ship.y, by: -1, on: i });
       }
       if (this.phase === 'battle' && ship.alive) this.scores[i].time += dt; // survival score
     });
@@ -799,7 +800,7 @@ export class MpSession {
           if (ship.reload <= 0) {
             if (sub) this.fireTorpedo(ship, MG_RELOAD_SUB, 0);
             else this.fireSide(ship, 1, MG_RELOAD);
-            this.pendingEvents.push({ e: 'fire' });
+            this.pendingEvents.push({ e: 'fire', by: i });
           }
           return;
         }
@@ -824,7 +825,7 @@ export class MpSession {
         } else {
           this.fireBroadside(ship);
         }
-        this.pendingEvents.push({ e: 'fire' });
+        this.pendingEvents.push({ e: 'fire', by: i });
       });
     }
 
@@ -852,7 +853,7 @@ export class MpSession {
               this.scores[owner].damage += before - ship.health;
               if (before > 0 && ship.health <= 0) this.scores[owner].kills++; // sinking shot
             }
-            this.pendingEvents.push({ e: 'hit', x: ball.x, y: ball.y });
+            this.pendingEvents.push({ e: 'hit', x: ball.x, y: ball.y, by: owner, on: si });
           }
           break;
         }
@@ -993,18 +994,27 @@ export class MpSession {
         // Whose bow (the whole curved front) is driving into the other?
         const aBow = Math.cos(A.heading) * nx + Math.sin(A.heading) * ny >= RAM_BOW_COS;
         const bBow = Math.cos(B.heading) * -nx + Math.sin(B.heading) * -ny >= RAM_BOW_COS;
+        const mx = (A.x + B.x) / 2;
+        const my = (A.y + B.y) / 2;
         let hit = false;
+        // Emit the hit tagged with rammer (by) and victim (on) so each ram is
+        // audible only to the two ships in it.
+        const ram = (ai: number, vi: number, selfDmg: number) => {
+          if (this.applyRam(ai, vi, RAM_DMG, selfDmg)) {
+            this.pendingEvents.push({ e: 'hit', x: mx, y: my, by: ai, on: vi });
+            hit = true;
+          }
+        };
         if (aBow && bBow) {
           // Bow-to-bow: both hulls take the full ram, no extra return damage.
-          if (this.applyRam(i, j, RAM_DMG, 0)) hit = true;
-          if (this.applyRam(j, i, RAM_DMG, 0)) hit = true;
+          ram(i, j, 0);
+          ram(j, i, 0);
         } else if (aBow) {
-          if (this.applyRam(i, j, RAM_DMG, RAM_SELF_DMG)) hit = true;
+          ram(i, j, RAM_SELF_DMG);
         } else if (bBow) {
-          if (this.applyRam(j, i, RAM_DMG, RAM_SELF_DMG)) hit = true;
+          ram(j, i, RAM_SELF_DMG);
         }
         if (hit) {
-          this.pendingEvents.push({ e: 'hit', x: (A.x + B.x) / 2, y: (A.y + B.y) / 2 });
           this.ramCd[i] = RAM_CD;
           this.ramCd[j] = RAM_CD;
         }
@@ -1402,10 +1412,14 @@ export class MpSession {
   private applyEvents(events: GameEvent[]) {
     for (const ev of events) {
       if (ev.e === 'fire') {
-        this.sounds.fire();
+        // Only your own guns are audible — a fleet of bots firing would be a din.
+        if (ev.by === this.you) this.sounds.fire();
       } else if (ev.e === 'hit') {
-        this.explosions.push(new Explosion(ev.x, ev.y));
-        this.sounds.hit();
+        this.explosions.push(new Explosion(ev.x, ev.y)); // every hit still flashes
+        // ...but only hits you're part of make a sound: taking one reads as a
+        // heavier "get hit", landing one as a lighter "my hit".
+        if (ev.on === this.you) this.sounds.getHit();
+        else if (ev.by === this.you) this.sounds.myHit();
       } else {
         this.splashes.push(new Splash(ev.x, ev.y));
       }

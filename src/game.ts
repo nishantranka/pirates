@@ -57,8 +57,10 @@ export class Game {
   onGameOver: ((won: boolean) => void) | null = null;
   /** Called when the player fires a broadside. */
   onCannonFire: (() => void) | null = null;
-  /** Called each time a cannonball hits a ship. */
-  onHit: (() => void) | null = null;
+  /** Called each time a hit lands; the flag is true when the player was the one
+   *  hit (so the UI can play a heavier "you got hit" cue) and false when the
+   *  player dealt it. */
+  onHit: ((youWereHit: boolean) => void) | null = null;
   /** When non-null (survivor mode), renders the kill count in the HUD. */
   survivorKills: number | null = null;
   /** While true another renderer (multiplayer) owns the canvas; this loop idles. */
@@ -282,7 +284,7 @@ export class Game {
         ball.spent = true;
         target.takeHit(ball.damage);
         this.explosions.push(new Explosion(ball.x, ball.y));
-        this.onHit?.();
+        this.onHit?.(target === this.player);
       }
     }
     this.cannonballs = this.cannonballs.filter((b) => !b.spent);
@@ -320,26 +322,32 @@ export class Game {
 
     if (this.ramCd > 0) return; // just separated recently
 
-    // Whose bow (the whole curved front) is driving into the other?
+    // Whose bow (the whole curved front) is driving into the other? A is the
+    // player, B the enemy — so youWereHit is true whenever the player's hull
+    // takes the ram (bow-to-bow, or being speared).
     const aBow = Math.cos(A.heading) * nx + Math.sin(A.heading) * ny >= RAM.bowCos;
     const bBow = Math.cos(B.heading) * -nx + Math.sin(B.heading) * -ny >= RAM.bowCos;
+    let youWereHit: boolean;
     if (aBow && bBow) {
       // Bow-to-bow: both hulls take the full ram, no extra return damage.
       A.takeHit(RAM.dmg);
       B.takeHit(RAM.dmg);
+      youWereHit = true;
     } else if (aBow) {
       B.takeHit(RAM.dmg);
       A.takeHit(RAM.selfDmg);
+      youWereHit = false; // you did the ramming
     } else if (bBow) {
       A.takeHit(RAM.dmg);
       B.takeHit(RAM.selfDmg);
+      youWereHit = true;
     } else {
       return; // glancing scrape — no damage, no cooldown
     }
 
     this.ramCd = RAM.cd;
     this.explosions.push(new Explosion(A.x + nx * (dist / 2), A.y + ny * (dist / 2)));
-    this.onHit?.();
+    this.onHit?.(youWereHit);
   }
 
   /** Player submarine: a single straight-ahead bow torpedo. */
