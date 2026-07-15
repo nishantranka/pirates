@@ -1,15 +1,16 @@
 # Pirates: Naval Combat
 
+**[▶ Play it now in your browser](https://nishantranka.github.io/pirates/)** — no install, no sign-up.
+
 A top-down naval combat game for the browser, inspired by the ship battles in
 [Sid Meier's Pirates!](https://sidmeierspirates.fandom.com/wiki/Naval_Combat).
 Built with HTML5 Canvas and TypeScript — no game framework, no backend, the
 whole game runs in the front end.
 
-**This fork adds online multiplayer**: up to 11 captains — you plus any mix of
-friends and AI bots — battle in a shared free-for-all arena dotted with islands
-to hide behind. No server of your own needed — peers connect directly over
-WebRTC ([PeerJS](https://peerjs.com/)), so it still deploys as plain static
-files.
+**Online multiplayer**: up to 11 captains — you plus any mix of friends and AI
+bots — battle in a shared free-for-all arena dotted with islands to hide behind.
+No server of your own needed — peers connect directly over WebRTC
+([PeerJS](https://peerjs.com/)), so it still deploys as plain static files.
 
 ## Multiplayer
 
@@ -204,3 +205,11 @@ so the build works under the `https://<user>.github.io/<repo>/` subpath.
 - More cannon ammo types (chain shot, grape shot)
 - Boarding when ships collide
 - Sound effects
+
+## Credits
+
+Forked from the original [piwodlaiwo/pirates](https://github.com/piwodlaiwo/pirates),
+which built the single-player naval duel. This fork adds online multiplayer
+(peer-to-peer over WebRTC), AI bot captains, the submarine, the maelstrom,
+power-ups, and the wrap-around world. Inspired throughout by the naval combat in
+[Sid Meier's Pirates!](https://sidmeierspirates.fandom.com/wiki/Naval_Combat).
