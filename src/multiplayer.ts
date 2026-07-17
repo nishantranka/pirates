@@ -73,6 +73,8 @@ const RAM_SELF_DMG = RAM.selfDmg;
 const RAM_BOW_COS = RAM.bowCos;
 const RAM_CD = RAM.cd;
 const MAX_PICKUPS = 9;
+const MAX_PICKUPS_SCORE = 15; // Leaderboard is a bounty-rich brawl — more on the water at once
+const PICKUP_HASTE_SCORE = 0.55; // ...and they respawn faster too (interval multiplier)
 const PICKUP_R = 15; // px
 const PICKUP_TTL = 20; // s before an uncollected pickup relocates
 const SPAWN_PROTECT = 2; // s of spawn invulnerability while ships scatter
@@ -81,10 +83,13 @@ const START_FREEZE = 3; // s everyone holds still at round start to find their s
 // Leaderboard is a fixed-length deathmatch: sink as many as you can before the
 // clock runs out, respawning each time you go down. (Survivor is untimed —
 // last ship afloat wins — so none of this applies there.)
-const MATCH_DURATION = 180; // s of play in a Leaderboard match (3 minutes)
+const MATCH_DURATION = 90; // s of play in a Leaderboard match (1:30)
 const DEATH_PAUSE = 2; // s a sunk ship stays down before it respawns
 const RESPAWN_FREEZE = 1.2; // s a respawned ship holds still before it can move/fire
 const RESPAWN_BAND = 0.25; // respawn within the central 50% of the map (0.25–0.75 each axis)
+// The storm holds off until the final stretch, then ramps to full by time-up —
+// and respawns stop the moment it sets in, so the last 20 s are sudden death.
+const STORM_WINDOW = 20; // s of maelstrom finale at the end of a Leaderboard match
 
 // Whirlpool (maelstrom): a growing vortex at the arena center that drags every
 // ship inward and shreds anyone caught outside its shrinking eye. Radial, so it
@@ -885,11 +890,12 @@ export class MpSession {
     }
     this.balls = this.balls.filter((b) => !b.spent);
 
-    // Leaderboard: sunk ships respawn in the middle of the map after a pause.
-    // Do this after all damage for the tick so a ship that died this frame
-    // starts its death timer immediately.
+    // Leaderboard: sunk ships respawn in the middle of the map after a pause —
+    // but once the storm sets in for the finale, deaths are permanent. Do this
+    // after all damage for the tick so a ship that died this frame starts its
+    // death timer immediately.
     this.timeLeft = this.mode === 'score' ? Math.max(0, MATCH_DURATION - this.clock) : -1;
-    if (this.phase === 'battle' && this.mode === 'score') this.updateRespawns();
+    if (this.phase === 'battle' && this.mode === 'score' && !this.stormActive()) this.updateRespawns();
 
     this.updateBuffView();
 
@@ -1133,8 +1139,20 @@ export class MpSession {
 
   // ── Whirlpool (host) ────────────────────────────────────────────────────────
 
-  /** Maelstrom strength for the current clock: 0 before it forms → 1 at full. */
+  /** True once the Leaderboard storm has set in (its final-stretch sudden death). */
+  private stormActive(): boolean {
+    return this.mode === 'score' && this.clock >= MATCH_DURATION - STORM_WINDOW;
+  }
+
+  /** Maelstrom strength for the current clock: 0 before it forms → 1 at full.
+   *  Leaderboard holds the storm until the last STORM_WINDOW seconds, then ramps
+   *  it to full right as the clock runs out. Survivor keeps the slow build. */
   private whirlStrength(): number {
+    if (this.mode === 'score') {
+      const start = MATCH_DURATION - STORM_WINDOW;
+      if (this.clock < start) return 0;
+      return Math.min((this.clock - start) / STORM_WINDOW, 1);
+    }
     if (this.clock < WHIRL_START) return 0;
     return Math.min((this.clock - WHIRL_START) / WHIRL_RAMP, 1);
   }
@@ -1176,16 +1194,18 @@ export class MpSession {
     this.pickups = this.pickups.filter((p) => p.ttl > 0);
 
     // Fewer captains afloat → fewer bounties, so goodies thin out as the fight
-    // narrows down to the survivors.
+    // narrows down to the survivors. Leaderboard keeps the water far busier.
+    const score = this.mode === 'score';
+    const cap = score ? MAX_PICKUPS_SCORE : MAX_PICKUPS;
     const alive = this.ships.reduce((n, s) => n + (s.alive ? 1 : 0), 0);
-    const maxActive = Math.max(1, Math.round((MAX_PICKUPS * alive) / this.ships.length));
+    const maxActive = Math.max(1, Math.round((cap * alive) / this.ships.length));
 
-    // Timed spawns per type.
+    // Timed spawns per type — quicker to reappear in Leaderboard.
     for (const type of PICKUP_ORDER) {
       this.pickupTimers[type] -= dt;
       if (this.pickupTimers[type] > 0) continue;
       const [lo, hi] = PICKUP_SPAWN[type];
-      this.pickupTimers[type] = lo + Math.random() * (hi - lo);
+      this.pickupTimers[type] = (lo + Math.random() * (hi - lo)) * (score ? PICKUP_HASTE_SCORE : 1);
       if (this.pickups.length >= maxActive) continue;
       const spot = this.pickDifficultSpot();
       if (spot) this.pickups.push({ id: this.pickupId++, type, x: spot.x, y: spot.y, ttl: PICKUP_TTL });
