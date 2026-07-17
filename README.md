@@ -81,10 +81,12 @@ battle once 2–11 captains are in. Solo? Hit **Fill with Bots** for an instant
   cover, favoring fast points of sail and keeping islands between themselves
   and the threat.
 - **Two battle modes** (host picks in the lobby): **Leaderboard** is a
-  **3-minute deathmatch with respawns** — when you sink you drop out for two
+  **90-second deathmatch with respawns** — when you sink you drop out for two
   seconds, then reappear in the middle of the map with a fresh spawn shield and
   a brief hold before you can move, so you sink as many as you can before the
-  clock runs out. It ranks by a weighted score — **sinking** enemies counts most
+  clock runs out. Bounties are plentiful and spawn quickly. For the **final 20
+  seconds the maelstrom sets in and respawns stop** — a sudden-death scramble to
+  the center. It ranks by a weighted score — **sinking** enemies counts most
   (8 pts), **damage dealt** next, and **time survived** least — and the highest
   score when time expires wins. **Survivor** ignores kills entirely: only time
   afloat counts, there are **no respawns**, and the last one standing wins —
