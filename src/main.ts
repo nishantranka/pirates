@@ -371,7 +371,7 @@ let myShip: ShipTypeName = 'small';
 // Battle-mode cards inside the lobby — the host picks the win condition.
 const lobbyModeRow = document.getElementById('lobby-mode-cards')!;
 const mpModeOptions: Array<{ key: MpMode; label: string; stat: string }> = [
-  { key: 'score', label: 'Leaderboard', stat: 'sinks + damage + survival' },
+  { key: 'score', label: 'Leaderboard', stat: '3-min deathmatch · respawns' },
   { key: 'survival', label: 'Survivor', stat: 'last one standing wins' },
 ];
 mpModeOptions.forEach(({ key, label, stat }) => {

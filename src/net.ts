@@ -98,6 +98,7 @@ export type H2CMsg =
       pickups: PickupState[];
       eye: number; // whirlpool eye radius in px (shrinks over time; large = no maelstrom yet)
       freeze: number; // start-of-round locate-your-ship pause remaining, s
+      timeLeft: number; // Leaderboard match seconds remaining; -1 in untimed (Survivor) matches
     }
   | { t: 'end'; winner: number }
   | { t: 'toLobby' };

@@ -20,7 +20,8 @@ lobby every captain chooses their own boat and readies up; the host starts the
 battle once 2–11 captains are in. Solo? Hit **Fill with Bots** for an instant
 10-bot brawl.
 
-- **Free-for-all** — last ship afloat rules the seas. Sink or be sunk.
+- **Free-for-all** — a shared arena where it's sink or be sunk. Play a timed
+  Leaderboard deathmatch (respawns) or last-ship-standing Survivor.
 - **Islands & shallows** — Minecraft-style blocky islands: a ring of
   translucent shallow-water blocks warns you, then solid sand means death —
   **running aground is fatal**. Cannonballs splash harmlessly into the sand,
@@ -79,18 +80,21 @@ battle once 2–11 captains are in. Solo? Hit **Fill with Bots** for an instant
   an island blocks the shot, and when wounded they break off and run for
   cover, favoring fast points of sail and keeping islands between themselves
   and the threat.
-- **Two battle modes** (host picks in the lobby): **Leaderboard** ranks by a
-  weighted score — **sinking** enemies counts most (8 pts), **damage dealt**
-  next, and **time survived** least. **Survivor** ignores kills entirely: only
-  time afloat counts and the last one standing wins — bots switch to a
-  cautious, evasive doctrine (no hunting, no ramming) and fight only in
-  self-defense. A
+- **Two battle modes** (host picks in the lobby): **Leaderboard** is a
+  **3-minute deathmatch with respawns** — when you sink you drop out for two
+  seconds, then reappear in the middle of the map with a fresh spawn shield and
+  a brief hold before you can move, so you sink as many as you can before the
+  clock runs out. It ranks by a weighted score — **sinking** enemies counts most
+  (8 pts), **damage dealt** next, and **time survived** least — and the highest
+  score when time expires wins. **Survivor** ignores kills entirely: only time
+  afloat counts, there are **no respawns**, and the last one standing wins —
+  bots switch to a cautious, evasive doctrine (no hunting, no ramming) and fight
+  only in self-defense; it ends when one ship is left afloat or **every human
+  captain is dead** (you never spectate bots finishing each other off). A
   collapsible standings panel sits top-right (collapsed to a pill showing the
   current leader; click to expand the full ranked board), and the **final
   standings are shown on the end screen**. The captain with the highest score
-  when the round ends rules the seas.
-- The round ends when one ship is left afloat — or when **every human captain
-  is dead** (you never spectate bots finishing each other off).
+  when the match ends rules the seas.
 - After a battle the host can call a **rematch** (fresh islands) or send
   everyone **back to the lobby**. If a captain drops mid-fight, their ship
   strikes its colors and sinks.
