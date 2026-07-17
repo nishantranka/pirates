@@ -78,6 +78,14 @@ const PICKUP_TTL = 20; // s before an uncollected pickup relocates
 const SPAWN_PROTECT = 2; // s of spawn invulnerability while ships scatter
 const START_FREEZE = 3; // s everyone holds still at round start to find their ship
 
+// Leaderboard is a fixed-length deathmatch: sink as many as you can before the
+// clock runs out, respawning each time you go down. (Survivor is untimed —
+// last ship afloat wins — so none of this applies there.)
+const MATCH_DURATION = 180; // s of play in a Leaderboard match (3 minutes)
+const DEATH_PAUSE = 2; // s a sunk ship stays down before it respawns
+const RESPAWN_FREEZE = 1.2; // s a respawned ship holds still before it can move/fire
+const RESPAWN_BAND = 0.25; // respawn within the central 50% of the map (0.25–0.75 each axis)
+
 // Whirlpool (maelstrom): a growing vortex at the arena center that drags every
 // ship inward and shreds anyone caught outside its shrinking eye. Radial, so it
 // works with the wrap-around world (there's no "safe far edge" — the current
@@ -333,6 +341,9 @@ export class MpSession {
   private scoreView: { score: number; kills: number }[] = []; // host + guest (leaderboard)
   private ramCd: number[] = []; // per-ship ram-damage cooldown (host)
   private spawnUntil: number[] = []; // per-ship spawn-invulnerability expiry (host)
+  private respawnAt: number[] = []; // clock time a sunk ship respawns (Leaderboard); Infinity = n/a
+  private moveFreezeUntil: number[] = []; // clock until a (re)spawned ship may move/fire (host)
+  private timeLeft = -1; // Leaderboard match seconds remaining (host computes, guest mirrors); -1 = untimed
   private diveCharge: number[] = []; // per-ship submarine dive charge (host)
   private guestCharge: number[] = []; // dive charge fractions mirrored from snapshots (guest)
   private eyeR = EYE_MAX; // whirlpool eye radius (host computes, guest mirrors)
@@ -675,6 +686,9 @@ export class MpSession {
     this.scoreView = this.spawns.map(() => ({ score: 0, kills: 0 }));
     this.ramCd = this.spawns.map(() => 0);
     this.spawnUntil = this.spawns.map(() => SPAWN_PROTECT); // clock starts at 0
+    this.respawnAt = this.spawns.map(() => Infinity);
+    this.moveFreezeUntil = this.spawns.map(() => 0);
+    this.timeLeft = this.mode === 'score' ? MATCH_DURATION : -1;
     this.diveCharge = this.spawns.map(() => DIVE_MAX);
     this.eyeR = EYE_MAX;
     this.pickupTimers = { ...ZERO_TIMERS };
@@ -758,22 +772,27 @@ export class MpSession {
     }
 
     this.ships.forEach((ship, i) => {
+      // A freshly (re)spawned ship holds still for a beat before its captain
+      // takes the helm — no steering, no drive, no diving, no guns.
+      const frozen = this.moveFrozen(i);
       ship.boostFactor =
-        this.phase === 'battle' && this.buffs[i].speedUntil > this.clock ? SPEED_MULT : 1;
-      const turn: Turn = this.phase === 'battle' && this.players[i].connected ? this.players[i].turn : 0;
+        this.phase === 'battle' && !frozen && this.buffs[i].speedUntil > this.clock ? SPEED_MULT : 1;
+      const turn: Turn =
+        this.phase === 'battle' && this.players[i].connected && !frozen ? this.players[i].turn : 0;
 
       // Submarine diving: hold to submerge while the charge lasts; the charge
       // refills on the surface. Other hulls stay pinned to depth 0.
       if (ship.type === 'submarine' && ship.alive) {
         const wantDive =
-          this.phase === 'battle' && this.players[i].connected && this.players[i].dive && this.diveCharge[i] > 0;
+          !frozen && this.phase === 'battle' && this.players[i].connected && this.players[i].dive && this.diveCharge[i] > 0;
         ship.depth = Math.max(0, Math.min(1, ship.depth + ((wantDive ? 1 : -1) * dt) / DIVE_ANIM));
         if (ship.depth > 0.15 && wantDive) this.diveCharge[i] = Math.max(0, this.diveCharge[i] - dt);
         else if (ship.depth === 0) this.diveCharge[i] = Math.min(DIVE_MAX, this.diveCharge[i] + DIVE_REFILL * dt);
       }
 
-      // Submarines are engine-powered — the wind never touches them.
-      const sf = ship.type === 'submarine' ? 1 : this.wind.speedFactor(ship.heading);
+      // Submarines are engine-powered — the wind never touches them. A frozen
+      // ship has zero drive, so it stays put where it respawned.
+      const sf = frozen ? 0 : ship.type === 'submarine' ? 1 : this.wind.speedFactor(ship.heading);
       ship.update(dt, turn, WORLD_W, WORLD_H, sf);
       // Running aground is fatal — islands are obstacles, not bumpers.
       // (Spawn-protected ships are unsinkable for their grace period.)
@@ -791,6 +810,7 @@ export class MpSession {
     if (this.phase === 'battle') {
       this.ships.forEach((ship, i) => {
         if (!ship.alive || !this.players[i].connected) return;
+        if (this.moveFrozen(i)) return; // just respawned — guns still holstered
         const b = this.buffs[i];
         const sub = ship.type === 'submarine';
         if (ship.depth > 0.15 && !sub) return; // only subs can shoot from underwater
@@ -865,17 +885,30 @@ export class MpSession {
     }
     this.balls = this.balls.filter((b) => !b.spent);
 
+    // Leaderboard: sunk ships respawn in the middle of the map after a pause.
+    // Do this after all damage for the tick so a ship that died this frame
+    // starts its death timer immediately.
+    this.timeLeft = this.mode === 'score' ? Math.max(0, MATCH_DURATION - this.clock) : -1;
+    if (this.phase === 'battle' && this.mode === 'score') this.updateRespawns();
+
     this.updateBuffView();
 
     // Apply this tick's events locally (sounds + effects), then queue for guests.
     if (this.pendingEvents.length > 0) this.applyEvents(this.pendingEvents);
 
-    // Round end: one ship left afloat — or every human captain is dead
-    // (nobody wants to spectate bots finishing each other off).
+    // Match end. Leaderboard is timed — the clock running out ends it, whoever
+    // leads. Survivor ends when one ship is left afloat, or every human captain
+    // is dead (nobody wants to spectate bots finishing each other off).
     if (this.phase === 'battle') {
-      const alive = this.ships.filter((s) => s.alive).length;
-      const humansAlive = this.players.some((p, i) => !p.bot && this.ships[i].alive);
-      if ((alive <= 1 || !humansAlive) && this.endTimer < 0) this.endTimer = END_DELAY;
+      let matchOver: boolean;
+      if (this.mode === 'score') {
+        matchOver = this.clock >= MATCH_DURATION;
+      } else {
+        const alive = this.ships.filter((s) => s.alive).length;
+        const humansAlive = this.players.some((p, i) => !p.bot && this.ships[i].alive);
+        matchOver = alive <= 1 || !humansAlive;
+      }
+      if (matchOver && this.endTimer < 0) this.endTimer = END_DELAY;
       if (this.endTimer >= 0) {
         this.endTimer -= dt;
         if (this.endTimer <= 0) {
@@ -1038,6 +1071,64 @@ export class MpSession {
     // The rammer pays the return damage (unless shielded).
     if (selfDmg > 0 && attacker.shield <= 0) attacker.takeHit(selfDmg);
     return true;
+  }
+
+  // ── Respawns (host, Leaderboard) ──────────────────────────────────────────────
+
+  /** True while ship `i` is in its post-(re)spawn hold and can't move or fire. */
+  private moveFrozen(i: number): boolean {
+    return this.mode === 'score' && this.moveFreezeUntil[i] > this.clock;
+  }
+
+  /** A sunk ship stays down for DEATH_PAUSE, then returns to the middle of the
+   *  map with the round-start spawn shield + glow and a brief helm-lock. */
+  private updateRespawns() {
+    for (let i = 0; i < this.ships.length; i++) {
+      if (this.ships[i].alive) continue;
+      if (!this.players[i].connected) continue; // a captain who left stays sunk
+      if (this.respawnAt[i] === Infinity) {
+        this.respawnAt[i] = this.clock + DEATH_PAUSE; // just went down — start the count
+      } else if (this.clock >= this.respawnAt[i]) {
+        this.respawn(i);
+      }
+    }
+  }
+
+  private respawn(i: number) {
+    const ship = this.ships[i];
+    const spot = this.pickRespawnSpot(ship.width);
+    ship.x = spot.x;
+    ship.y = spot.y;
+    ship.heading = Math.random() * Math.PI * 2;
+    ship.health = ship.maxHealth;
+    ship.sinkProgress = 0;
+    ship.shield = 0;
+    ship.depth = 0;
+    ship.boostFactor = 1;
+    ship.reload = 0;
+    ship.gunHighlight = false;
+    ship.wake = [];
+    // A respawn is a clean slate — old power-ups don't carry over.
+    this.buffs[i] = { doubleUntil: 0, speedUntil: 0, mgUntil: 0, mgArmed: false };
+    this.diveCharge[i] = DIVE_MAX;
+    this.spawnUntil[i] = this.clock + SPAWN_PROTECT; // shield bubble + glow, like the start
+    this.moveFreezeUntil[i] = this.clock + RESPAWN_FREEZE; // hold the helm for a beat
+    this.respawnAt[i] = Infinity;
+  }
+
+  /** A clear point in the central 50% of the arena — off the islands and not
+   *  right on top of a ship that's still afloat. */
+  private pickRespawnSpot(width: number): { x: number; y: number } {
+    const span = 1 - 2 * RESPAWN_BAND;
+    let spot = { x: WORLD_W / 2, y: WORLD_H / 2 };
+    for (let attempt = 0; attempt < 30; attempt++) {
+      const x = WORLD_W * (RESPAWN_BAND + Math.random() * span);
+      const y = WORLD_H * (RESPAWN_BAND + Math.random() * span);
+      if (shipHitsIsland(this.islands, { x, y, width })) continue;
+      spot = { x, y };
+      if (this.ships.every((s) => !s.alive || Math.hypot(s.x - x, s.y - y) > 140)) break;
+    }
+    return spot;
   }
 
   // ── Whirlpool (host) ────────────────────────────────────────────────────────
@@ -1236,6 +1327,7 @@ export class MpSession {
       pickups: this.pickups.map((p) => ({ t: p.type, x: p.x, y: p.y })),
       eye: this.eyeR,
       freeze: this.freeze,
+      timeLeft: this.timeLeft,
     };
     this.pendingEvents = [];
     this.broadcast(msg);
@@ -1269,6 +1361,7 @@ export class MpSession {
         this.ships = msg.ships.map((sp) => new Ship(sp.x, sp.y, sp.heading, sp.color, sp.type));
         this.ships[this.you].hullColor = YOU_COLOR; // your own hull is always pink
         this.freeze = START_FREEZE;
+        this.timeLeft = msg.mode === 'score' ? MATCH_DURATION : -1;
         this.targets = msg.ships.map((sp) => ({
           x: sp.x,
           y: sp.y,
@@ -1307,6 +1400,7 @@ export class MpSession {
         this.pickups = msg.pickups.map((p) => ({ id: 0, type: p.t, x: p.x, y: p.y, ttl: 1 }));
         this.eyeR = msg.eye;
         this.freeze = msg.freeze;
+        this.timeLeft = msg.timeLeft;
         this.lastSnapAt = performance.now();
         this.wind.direction = msg.wind;
         this.applyEvents(msg.events);
@@ -1803,6 +1897,25 @@ export class MpSession {
     // storm is closing, a warning banner.
     this.drawWindIndicator();
 
+    // Leaderboard match countdown, top-center. Turns red for the final 15 s.
+    if (this.timeLeft >= 0) {
+      const ctx = this.ctx;
+      const m = Math.floor(this.timeLeft / 60);
+      const s = Math.floor(this.timeLeft % 60);
+      const text = `${m}:${String(s).padStart(2, '0')}`;
+      ctx.save();
+      ctx.font = 'bold 26px system-ui, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'top';
+      const x = this.viewW / 2;
+      ctx.lineWidth = 4;
+      ctx.strokeStyle = 'rgba(0, 0, 0, 0.6)';
+      ctx.strokeText(text, x, 12);
+      ctx.fillStyle = this.timeLeft <= 15 ? '#ff7a7a' : '#ffffff';
+      ctx.fillText(text, x, 12);
+      ctx.restore();
+    }
+
     if (this.eyeR < EYE_MAX) {
       const ctx = this.ctx;
       ctx.save();
@@ -1811,11 +1924,12 @@ export class MpSession {
       ctx.textBaseline = 'top';
       const text = '🌀 MAELSTROM — THE SEA IS PULLING IN';
       const x = this.viewW / 2;
+      const y = this.timeLeft >= 0 ? 46 : 14; // clear the match clock when it's shown
       ctx.lineWidth = 3;
       ctx.strokeStyle = 'rgba(0, 0, 0, 0.6)';
-      ctx.strokeText(text, x, 14);
+      ctx.strokeText(text, x, y);
       ctx.fillStyle = '#ff9db3';
-      ctx.fillText(text, x, 14);
+      ctx.fillText(text, x, y);
       ctx.restore();
     }
 
