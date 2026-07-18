@@ -9,6 +9,30 @@ export interface BtnRect {
   h: number;
 }
 
+/** True when the device plausibly has a touchscreen. `maxTouchPoints` alone
+ *  reports 0 in some Android WebViews (chat-app in-app browsers, where invite
+ *  links usually open) and in "request desktop site" mode, so several signals
+ *  are consulted — and callers additionally upgrade at runtime on the first
+ *  real touch event, which is proof positive. */
+export function touchCapable(): boolean {
+  if (navigator.maxTouchPoints > 0 || 'ontouchstart' in window) return true;
+  return window.matchMedia?.('(any-pointer: coarse)').matches ?? false;
+}
+
+// iOS home-indicator / notch inset in px, exposed by style.css as --safe-bottom
+// (env() is CSS-only). Without it the bottom button row sits in the swipe-up
+// gesture zone. Rotation changes the inset, so re-read on resize.
+let safeBottom = 0;
+function readSafeBottom() {
+  const v = getComputedStyle(document.documentElement).getPropertyValue('--safe-bottom');
+  safeBottom = parseFloat(v) || 0;
+}
+readSafeBottom();
+// The stylesheet defining --safe-bottom may not be applied yet when this
+// module first runs (prod loads CSS via <link>), so read again after load.
+window.addEventListener('load', readSafeBottom);
+window.addEventListener('resize', readSafeBottom);
+
 // Large enough for thumbs.
 export const BTN_SIZE = 72;
 export const BTN_MARGIN = 24;
@@ -22,7 +46,7 @@ export interface TouchButtons {
 
 /** Steering in the bottom corners, fire bottom-center, dive stacked above fire. */
 export function layoutTouchButtons(w: number, h: number): TouchButtons {
-  const by = h - BTN_MARGIN - BTN_SIZE;
+  const by = h - BTN_MARGIN - BTN_SIZE - safeBottom;
   return {
     left: { x: BTN_MARGIN, y: by, w: BTN_SIZE, h: BTN_SIZE },
     right: { x: w - BTN_MARGIN - BTN_SIZE, y: by, w: BTN_SIZE, h: BTN_SIZE },

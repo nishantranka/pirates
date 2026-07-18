@@ -4,6 +4,12 @@
   box-sizing: border-box;
 }
 
+:root {
+  /* env() is CSS-only; touchui.ts reads this so canvas-drawn touch buttons
+     clear the iOS home-indicator gesture zone. */
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+}
+
 html,
 body {
   margin: 0;
