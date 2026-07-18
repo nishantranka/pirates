@@ -1,6 +1,6 @@
 import { Game, DIFFICULTIES, type DifficultyName } from './game';
 import { Input } from './input';
-import { MpSession, MAX_PLAYERS, PLAYER_COLORS, type LeaderboardEntry } from './multiplayer';
+import { MpSession, MAX_PLAYERS, crewColor, type LeaderboardEntry } from './multiplayer';
 import { CODE_LENGTH, type LobbyPlayerInfo, type MpMode } from './net';
 import { SAIL_TYPES, SHIP_TYPES, type ShipTypeName } from './ship';
 import './style.css';
@@ -400,7 +400,7 @@ function renderLobby(players: LobbyPlayerInfo[], you: number, canStart: boolean,
 
     const dot = document.createElement('span');
     dot.className = 'dot';
-    dot.style.background = PLAYER_COLORS[i];
+    dot.style.background = crewColor(i, players);
 
     const name = document.createElement('span');
     name.className = 'pname';
@@ -535,6 +535,32 @@ function mpCallbacks() {
       endMpSession(message);
     },
   };
+}
+
+// Pre-fill the name box: the remembered name, else a random pirate suggestion —
+// so blank joins (which used to leave everyone named "Captain") are rare. The
+// host still de-dupes clashes into "Name 2", "Name 3", …
+const NAME_IDEAS = [
+  'Red Beard',
+  'Sea Wolf',
+  'Storm Rider',
+  'Gold Tooth',
+  'Iron Hook',
+  'Wave Dancer',
+  'Salt Dog',
+  'Lucky Finn',
+  'Coral Queen',
+  'Tide Turner',
+  'Black Sails',
+  'Grog Baron',
+];
+try {
+  mpNameInput.value = localStorage.getItem('pirates-name') ?? '';
+} catch {
+  /* ignore */
+}
+if (!mpNameInput.value) {
+  mpNameInput.value = NAME_IDEAS[Math.floor(Math.random() * NAME_IDEAS.length)];
 }
 
 /** Remember the captain name so invite links can auto-join next time. */
