@@ -506,8 +506,14 @@ function mpCallbacks() {
       renderLobby(players, you, canStart, mode);
     },
     onStart() {
+      // Late joiners drop straight from the menu into a running battle, so
+      // clear the menu/status too — not just the lobby overlays.
+      menuOverlay.classList.add('hidden');
       lobbyOverlay.classList.add('hidden');
       mpendOverlay.classList.add('hidden');
+      mpStatus.textContent = '';
+      mpCreateBtn.disabled = false;
+      mpJoinBtn.disabled = false;
       game.suspended = true;
     },
     onEnd(winnerName: string | null) {

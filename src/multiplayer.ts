@@ -609,9 +609,13 @@ export class MpSession {
   // ── Host: lobby & connections ───────────────────────────────────────────────
 
   private acceptConnection(conn: DataConnection) {
-    if (this.phase !== 'lobby' || this.players.length >= MAX_PLAYERS) {
+    // Lobby joins AND mid-battle late joins are welcome; only a full roster or
+    // the end-of-round result screen turns a captain away.
+    if (!this.joinable()) {
       const reason =
-        this.phase === 'lobby' ? 'Room is full.' : 'A battle is already underway.';
+        this.players.length >= MAX_PLAYERS
+          ? 'Room is full.'
+          : 'The battle just ended — ask the host to rematch, then join again.';
       conn.on('open', () => {
         conn.send({ t: 'reject', reason } satisfies H2CMsg);
         setTimeout(() => conn.close(), 200);
@@ -623,15 +627,25 @@ export class MpSession {
     conn.on('close', () => this.onGuestGone(conn));
   }
 
+  private joinable(): boolean {
+    return (
+      (this.phase === 'lobby' || this.phase === 'battle') && this.players.length < MAX_PLAYERS
+    );
+  }
+
   private onGuestMessage(conn: DataConnection, msg: C2HMsg) {
     if (!this.active || !msg || typeof msg !== 'object') return;
     const idx = this.players.findIndex((p) => p.conn === conn);
 
     if (msg.t === 'hello') {
       if (idx !== -1) return; // already joined
-      if (this.phase !== 'lobby' || this.players.length >= MAX_PLAYERS) {
+      if (!this.joinable()) {
         conn.send({ t: 'reject', reason: 'Room is full.' } satisfies H2CMsg);
         setTimeout(() => conn.close(), 200);
+        return;
+      }
+      if (this.phase === 'battle') {
+        this.lateJoin(conn, msg.name);
         return;
       }
       this.players.push({
@@ -698,6 +712,59 @@ export class MpSession {
       candidate = base.slice(0, 16 - suffix.length) + suffix;
     }
     return candidate;
+  }
+
+  /** Mid-battle join: spawn the newcomer like a respawn (spawn shield + brief
+   *  helm lock in the arena center) and grow the roster on every client —
+   *  far friendlier than the old hard "battle already underway" rejection for
+   *  the 3rd friend who clicks the invite link a minute late. */
+  private lateJoin(conn: DataConnection, rawName: string) {
+    const player: HostPlayer = {
+      conn,
+      name: this.uniqueName(rawName),
+      ship: 'small',
+      ready: true,
+      connected: true,
+      bot: false,
+      turn: 0,
+      fire: false,
+      dive: false,
+    };
+    this.players.push(player);
+    const i = this.players.length - 1;
+
+    const spot = this.pickRespawnSpot(SHIP_TYPES[player.ship].width);
+    const spawn: ShipSpawn = {
+      name: player.name,
+      type: player.ship,
+      color: crewColor(i, this.players),
+      x: spot.x,
+      y: spot.y,
+      heading: Math.random() * Math.PI * 2,
+    };
+    this.spawns.push(spawn);
+    this.ships.push(new Ship(spawn.x, spawn.y, spawn.heading, spawn.color, spawn.type));
+    this.buffs.push({ doubleUntil: 0, speedUntil: 0, mgUntil: 0, mgArmed: false });
+    this.buffView.push({ shield: 0, spd: false, dbl: false, mg: false, inv: true });
+    this.scores.push({ time: 0, damage: 0, kills: 0 });
+    this.scoreView.push({ score: 0, kills: 0 });
+    this.ramCd.push(0);
+    this.spawnUntil.push(this.clock + SPAWN_PROTECT);
+    this.respawnAt.push(Infinity);
+    this.moveFreezeUntil.push(this.clock + RESPAWN_FREEZE);
+    this.diveCharge.push(DIVE_MAX);
+
+    // Everyone already sailing learns about the new ship; the newcomer gets
+    // the full battle state addressed to them. Both precede the next snapshot
+    // on their ordered channels, so indices always line up.
+    this.broadcast({ t: 'roster', ships: this.spawns });
+    conn.send({
+      t: 'start',
+      islands: this.islands,
+      ships: this.spawns,
+      you: i,
+      mode: this.mode,
+    } satisfies H2CMsg);
   }
 
   private canStart(): boolean {
@@ -1487,6 +1554,37 @@ export class MpSession {
         this.phase = 'battle';
         this.cb.onStart();
         this.startLoop();
+        break;
+
+      case 'roster':
+        // A captain joined mid-battle: append their ship (indices never shrink
+        // or reorder mid-round). Ignored outside battle — a late joiner also
+        // receives the broadcast just before their own tailored 'start'.
+        if (this.phase !== 'battle') break;
+        for (let i = this.ships.length; i < msg.ships.length; i++) {
+          const sp = msg.ships[i];
+          this.ships.push(new Ship(sp.x, sp.y, sp.heading, sp.color, sp.type));
+          this.targets.push({
+            x: sp.x,
+            y: sp.y,
+            heading: sp.heading,
+            health: SHIP_TYPES[sp.type].maxHealth,
+            sink: 0,
+            shield: 0,
+            spd: false,
+            dbl: false,
+            mg: false,
+            inv: true,
+            depth: 0,
+            charge: 1,
+            score: 0,
+            kills: 0,
+          });
+          this.buffView.push({ shield: 0, spd: false, dbl: false, mg: false, inv: true });
+          this.scoreView.push({ score: 0, kills: 0 });
+          this.guestCharge.push(1);
+        }
+        this.spawns = msg.ships;
         break;
 
       case 'state':
