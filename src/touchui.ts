@@ -1,5 +1,5 @@
-// Shared on-screen touch controls for touch devices: button layout, hit
-// testing, and drawing. Used by both practice battles (game.ts) and
+// Shared on-screen touch controls: a floating steer stick, a fire button, and
+// (for submarines) a dive toggle. Used by both practice battles (game.ts) and
 // multiplayer (multiplayer.ts) so the two modes feel identical under thumbs.
 
 export interface BtnRect {
@@ -37,26 +37,59 @@ window.addEventListener('resize', readSafeBottom);
 export const BTN_SIZE = 72;
 export const BTN_MARGIN = 24;
 
+const JOY_RADIUS = 56; // stick base radius
+const JOY_DEADZONE = 10; // px of drag before steering kicks in
+const TURN_DEADZONE = 0.15; // rad — stop turning when close enough to the drag heading
+
 export interface TouchButtons {
-  left: BtnRect;
-  right: BtnRect;
   fire: BtnRect;
   dive: BtnRect; // only drawn/used when your ship is a submarine
 }
 
-/** Steering in the bottom corners, fire bottom-center, dive stacked above fire. */
+/** Fire under the right thumb; dive stacked above it. Steering has no fixed
+ *  rect — the stick anchors wherever the other thumb lands. */
 export function layoutTouchButtons(w: number, h: number): TouchButtons {
   const by = h - BTN_MARGIN - BTN_SIZE - safeBottom;
   return {
-    left: { x: BTN_MARGIN, y: by, w: BTN_SIZE, h: BTN_SIZE },
-    right: { x: w - BTN_MARGIN - BTN_SIZE, y: by, w: BTN_SIZE, h: BTN_SIZE },
-    fire: { x: w / 2 - BTN_SIZE / 2, y: by, w: BTN_SIZE, h: BTN_SIZE },
-    dive: { x: w / 2 - BTN_SIZE / 2, y: by - BTN_SIZE - 12, w: BTN_SIZE, h: BTN_SIZE },
+    fire: { x: w - BTN_MARGIN - BTN_SIZE, y: by, w: BTN_SIZE, h: BTN_SIZE },
+    dive: { x: w - BTN_MARGIN - BTN_SIZE, y: by - BTN_SIZE - 12, w: BTN_SIZE, h: BTN_SIZE },
   };
 }
 
+// Thumbs are blunt and eyes are on the battle, so touches count a bit beyond
+// the drawn edge.
+const HIT_PADDING = 16;
+
 export function hitBtn(btn: BtnRect, tx: number, ty: number): boolean {
-  return tx >= btn.x && tx <= btn.x + btn.w && ty >= btn.y && ty <= btn.y + btn.h;
+  return (
+    tx >= btn.x - HIT_PADDING &&
+    tx <= btn.x + btn.w + HIT_PADDING &&
+    ty >= btn.y - HIT_PADDING &&
+    ty <= btn.y + btn.h + HIT_PADDING
+  );
+}
+
+/** Best-effort immersion when a battle starts on a touch device: fullscreen
+ *  plus a landscape lock. Support is inconsistent (iOS Safari refuses both),
+ *  so failures are silent and the game continues windowed. Must be called
+ *  from a user-gesture handler to have any chance of succeeding. */
+export async function requestGameFullscreen() {
+  try {
+    await document.documentElement.requestFullscreen?.();
+    const orientation = screen.orientation as { lock?: (o: string) => Promise<void> } | undefined;
+    await orientation?.lock?.('landscape');
+  } catch {
+    // Browser said no — carry on windowed.
+  }
+}
+
+/** Tactile feedback on phones that support it (Android; iOS ignores it). */
+export function haptic(pattern: number | number[]) {
+  try {
+    navigator.vibrate?.(pattern);
+  } catch {
+    // Some embedded WebViews throw on vibrate — feedback is best-effort.
+  }
 }
 
 export function drawTouchBtn(
@@ -78,4 +111,140 @@ export function drawTouchBtn(
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   ctx.fillText(label, btn.x + btn.w / 2, btn.y + btn.h / 2);
+}
+
+/** One-thumb steering: drag anywhere (off the buttons) and the ship turns
+ *  toward the drag direction. Fire is press-and-hold; dive is a tap toggle so
+ *  submariners don't need a third finger held down. */
+export class TouchControls {
+  /** True while a finger is on the fire button. */
+  fire = false;
+  /** Dive toggle state — tap flips it; the game surfaces the sub when the
+   *  charge runs out, but the toggle stays until tapped off. */
+  dive = false;
+  /** Desired world heading (rad) while steering, or null when the thumb is up. */
+  desired: number | null = null;
+
+  private joyId: number | null = null; // identifier of the steering touch
+  private ox = 0; // stick anchor
+  private oy = 0;
+  private kx = 0; // knob position (clamped to the base), for drawing
+  private ky = 0;
+  private diveHeld = false; // edge detector for the toggle
+
+  /** Feed every canvas touch event. `w`/`h` are canvas CSS-pixel dimensions. */
+  update(e: TouchEvent, canvas: HTMLCanvasElement, w: number, h: number, sub: boolean) {
+    const rect = canvas.getBoundingClientRect();
+    const sx = w / rect.width;
+    const sy = h / rect.height;
+    const btns = layoutTouchButtons(w, h);
+
+    let fire = false;
+    let diveHit = false;
+    let joy: { x: number; y: number } | null = null;
+    let claim: { id: number; x: number; y: number } | null = null;
+    for (const t of Array.from(e.touches)) {
+      const tx = (t.clientX - rect.left) * sx;
+      const ty = (t.clientY - rect.top) * sy;
+      // The steering finger stays the steering finger even if it wanders over
+      // a button; only new touches are hit-tested against the buttons.
+      if (t.identifier === this.joyId) joy = { x: tx, y: ty };
+      else if (hitBtn(btns.fire, tx, ty)) fire = true;
+      else if (sub && hitBtn(btns.dive, tx, ty)) diveHit = true;
+      else if (claim === null) claim = { id: t.identifier, x: tx, y: ty };
+    }
+
+    if (joy === null && claim !== null) {
+      // New steering finger: the stick anchors wherever it landed.
+      this.joyId = claim.id;
+      this.ox = claim.x;
+      this.oy = claim.y;
+      joy = { x: claim.x, y: claim.y };
+    }
+    if (joy === null) {
+      this.joyId = null;
+      this.desired = null;
+    } else {
+      const dx = joy.x - this.ox;
+      const dy = joy.y - this.oy;
+      const len = Math.hypot(dx, dy);
+      if (len > JOY_DEADZONE) this.desired = Math.atan2(dy, dx);
+      const ang = Math.atan2(dy, dx);
+      const clamped = Math.min(len, JOY_RADIUS);
+      this.kx = this.ox + Math.cos(ang) * clamped;
+      this.ky = this.oy + Math.sin(ang) * clamped;
+    }
+
+    this.fire = fire;
+    if (diveHit && !this.diveHeld) this.dive = !this.dive;
+    this.diveHeld = diveHit;
+  }
+
+  /** Per-frame: which way to turn to reach the drag heading. Re-evaluated
+   *  against the ship's current heading so it settles instead of orbiting. */
+  turn(heading: number): -1 | 0 | 1 {
+    if (this.desired === null) return 0;
+    let d = this.desired - heading;
+    while (d > Math.PI) d -= Math.PI * 2;
+    while (d < -Math.PI) d += Math.PI * 2;
+    if (Math.abs(d) < TURN_DEADZONE) return 0;
+    return d > 0 ? 1 : -1;
+  }
+
+  /** Forget all touch state (battle ended, session left). */
+  reset() {
+    this.fire = false;
+    this.dive = false;
+    this.desired = null;
+    this.joyId = null;
+    this.diveHeld = false;
+  }
+
+  /** `charge` is the submarine dive charge 0..1, shown as a fill in the dive
+   *  button so the player sees how much air is left without a separate HUD. */
+  draw(ctx: CanvasRenderingContext2D, w: number, h: number, sub: boolean, charge = 1) {
+    const btns = layoutTouchButtons(w, h);
+    drawTouchBtn(ctx, btns.fire, '🔥', this.fire);
+    if (sub) {
+      drawTouchBtn(ctx, btns.dive, '🤿', this.dive);
+      const d = btns.dive;
+      ctx.save();
+      ctx.beginPath();
+      ctx.roundRect(d.x, d.y, d.w, d.h, 14);
+      ctx.clip();
+      ctx.fillStyle = 'rgba(79, 216, 239, 0.35)';
+      const fh = d.h * Math.max(0, Math.min(1, charge));
+      ctx.fillRect(d.x, d.y + d.h - fh, d.w, fh);
+      ctx.restore();
+    }
+
+    if (this.joyId !== null) {
+      // Active stick: base ring at the anchor, knob toward the drag.
+      ctx.strokeStyle = 'rgba(255,255,255,0.5)';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(this.ox, this.oy, JOY_RADIUS, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.fillStyle = 'rgba(255,255,255,0.45)';
+      ctx.beginPath();
+      ctx.arc(this.kx, this.ky, 26, 0, Math.PI * 2);
+      ctx.fill();
+    } else {
+      // Idle hint where the left thumb naturally rests.
+      const cx = BTN_MARGIN + JOY_RADIUS;
+      const cy = h - BTN_MARGIN - JOY_RADIUS - safeBottom;
+      ctx.strokeStyle = 'rgba(255,255,255,0.35)';
+      ctx.lineWidth = 2;
+      ctx.setLineDash([6, 8]);
+      ctx.beginPath();
+      ctx.arc(cx, cy, JOY_RADIUS, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle = 'rgba(255,255,255,0.8)';
+      ctx.font = 'bold 28px system-ui, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('☸', cx, cy);
+    }
+  }
 }

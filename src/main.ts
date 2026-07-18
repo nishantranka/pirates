@@ -3,6 +3,7 @@ import { Input } from './input';
 import { MpSession, MAX_PLAYERS, crewColor, type LeaderboardEntry } from './multiplayer';
 import { CODE_LENGTH, type LobbyPlayerInfo, type MpMode } from './net';
 import { SAIL_TYPES, SHIP_TYPES, type ShipTypeName } from './ship';
+import { haptic, requestGameFullscreen, touchCapable } from './touchui';
 import './style.css';
 
 // Sound on/off, remembered across sessions. OFF by default — audio is opt-in;
@@ -61,7 +62,14 @@ function resize() {
 const input = new Input();
 const game = new Game(ctx, input);
 game.onCannonFire = playFire;
-game.onHit = (youWereHit: boolean) => (youWereHit ? playGetHit() : playMyHit());
+game.onHit = (youWereHit: boolean) => {
+  if (youWereHit) {
+    playGetHit();
+    haptic([30, 40, 30]);
+  } else {
+    playMyHit();
+  }
+};
 game.start();
 // Dev-only hook so E2E tests can observe practice mode; stripped in prod.
 if (import.meta.env.DEV) (window as unknown as { __game: Game }).__game = game;
@@ -510,6 +518,9 @@ function mpCallbacks() {
       renderLobby(players, you, canStart, mode);
     },
     onStart() {
+      // Hosts reach here inside the Start Battle tap, so the fullscreen +
+      // landscape request can succeed; for guests (no gesture) it's a no-op.
+      if (touchCapable()) void requestGameFullscreen();
       // Late joiners drop straight from the menu into a running battle, so
       // clear the menu/status too — not just the lobby overlays.
       menuOverlay.classList.add('hidden');

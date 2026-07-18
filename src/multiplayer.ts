@@ -35,7 +35,7 @@ import {
   type ShipState,
 } from './net';
 import { DIVE, gunOffsets, muzzleReach, RAM, SAIL_TYPES, Ship, SHIP_TYPES, wrapDelta, YOU_COLOR, type ShipTypeName, type Turn } from './ship';
-import { drawTouchBtn, hitBtn, layoutTouchButtons, touchCapable } from './touchui';
+import { haptic, TouchControls, touchCapable } from './touchui';
 import { Wind } from './wind';
 import type { DataConnection } from 'peerjs';
 
@@ -138,6 +138,9 @@ const FOLLOW_BELOW = 0.5;
 // 0.6 ≈ 1.8× the visible area of the original 0.8 — playtesters wanted more
 // warning of who's approaching; below ~0.55 ships get hard to tap-read.
 const FOLLOW_SCALE = 0.6;
+// The camera leads the ship by this many world px along its heading, so there
+// is more sea ahead (where fights happen) than behind.
+const CAM_LOOKAHEAD = 70;
 
 const SNAPSHOT_INTERVAL = 1 / 30;
 const INPUT_INTERVAL = 0.05; // guest input heartbeat
@@ -384,6 +387,7 @@ export class MpSession {
   // Not readonly: some WebViews under-report touch capability, so the first
   // real touch event anywhere upgrades this at runtime.
   private isTouchDevice = touchCapable();
+  private touch = new TouchControls();
 
   private constructor(
     isHost: boolean,
@@ -422,29 +426,16 @@ export class MpSession {
     this.isTouchDevice = true;
   };
 
-  /** On-screen thumb controls — multiplayer battles are steerable on touch
-   *  devices just like practice mode (plus a dive button for submarines). */
+  /** One-thumb steering + fire + dive toggle — multiplayer battles use the
+   *  same TouchControls as practice mode so both feel identical under thumbs. */
   private onTouch = (e: TouchEvent) => {
     this.isTouchDevice = true;
-    if (this.phase !== 'battle') return;
-    const rect = this.ctx.canvas.getBoundingClientRect();
-    const scaleX = this.viewW / rect.width;
-    const scaleY = this.viewH / rect.height;
-    const btns = layoutTouchButtons(this.viewW, this.viewH);
-    let left = false;
-    let right = false;
-    let fire = false;
-    let dive = false;
-    for (const t of Array.from(e.touches)) {
-      const tx = (t.clientX - rect.left) * scaleX;
-      const ty = (t.clientY - rect.top) * scaleY;
-      if (hitBtn(btns.left, tx, ty)) left = true;
-      if (hitBtn(btns.right, tx, ty)) right = true;
-      if (hitBtn(btns.fire, tx, ty)) fire = true;
-      if (hitBtn(btns.dive, tx, ty)) dive = true;
+    if (this.phase !== 'battle') {
+      this.touch.reset();
+      return;
     }
     const sub = this.ships[this.you]?.type === 'submarine';
-    this.input.setVirtual(left, right, fire, dive && sub);
+    this.touch.update(e, this.ctx.canvas, this.viewW, this.viewH, sub);
   };
 
   // ── Session entry points ────────────────────────────────────────────────────
@@ -614,6 +605,7 @@ export class MpSession {
     c.removeEventListener('touchend', this.onTouch);
     c.removeEventListener('touchcancel', this.onTouch);
     window.removeEventListener('touchstart', this.sawTouch);
+    this.touch.reset();
     this.input.setVirtual(false, false, false, false);
   }
 
@@ -1714,13 +1706,18 @@ export class MpSession {
     for (const ev of events) {
       if (ev.e === 'fire') {
         // Only your own guns are audible — a fleet of bots firing would be a din.
-        if (ev.by === this.you) this.sounds.fire();
+        if (ev.by === this.you) {
+          this.sounds.fire();
+          haptic(15);
+        }
       } else if (ev.e === 'hit') {
         this.explosions.push(new Explosion(ev.x, ev.y)); // every hit still flashes
         // ...but only hits you're part of make a sound: taking one reads as a
         // heavier "get hit", landing one as a lighter "my hit".
-        if (ev.on === this.you) this.sounds.getHit();
-        else if (ev.by === this.you) this.sounds.myHit();
+        if (ev.on === this.you) {
+          this.sounds.getHit();
+          haptic([30, 40, 30]);
+        } else if (ev.by === this.you) this.sounds.myHit();
       } else {
         this.splashes.push(new Splash(ev.x, ev.y));
       }
@@ -1771,19 +1768,31 @@ export class MpSession {
     for (const ship of this.ships) this.updateWake(ship, now);
 
     const me = this.ships[this.you];
+
+    // Touch steering resolves against the current heading every frame so the
+    // ship settles on the dragged direction instead of orbiting it.
+    if (this.isTouchDevice && this.phase === 'battle') {
+      const tt = me ? this.touch.turn(me.heading) : 0;
+      const sub = me?.type === 'submarine';
+      this.input.setVirtual(tt === -1, tt === 1, this.touch.fire, this.touch.dive && sub);
+    }
+
     if (fit < FOLLOW_BELOW && me) {
       // The whole view is open sea — painting it once here (not per tile)
       // avoids a hairline seam where wrapped tiles meet.
       ctx.fillStyle = '#2e6da6';
       ctx.fillRect(0, 0, cw, ch);
-      // Follow camera (phones / tiny windows): zoom in and keep your ship
-      // centered. Floors at "one world tile fills the screen" per axis, so the
-      // viewport never exceeds the world and at most 2×2 wrapped tiles show.
+      // Follow camera (phones / tiny windows): zoom in and track your ship,
+      // led slightly ahead so there's more sea in front than behind. Floors at
+      // "one world tile fills the screen" per axis, so the viewport never
+      // exceeds the world and at most 2×2 wrapped tiles show.
       const scale = Math.max(FOLLOW_SCALE, cw / WORLD_W, ch / WORLD_H);
       const vw = cw / scale;
       const vh = ch / scale;
-      const camX = (((me.x - vw / 2) % WORLD_W) + WORLD_W) % WORLD_W;
-      const camY = (((me.y - vh / 2) % WORLD_H) + WORLD_H) % WORLD_H;
+      const cx = me.x + Math.cos(me.heading) * CAM_LOOKAHEAD;
+      const cy = me.y + Math.sin(me.heading) * CAM_LOOKAHEAD;
+      const camX = (((cx - vw / 2) % WORLD_W) + WORLD_W) % WORLD_W;
+      const camY = (((cy - vh / 2) % WORLD_H) + WORLD_H) % WORLD_H;
       ctx.save();
       ctx.scale(scale, scale);
       ctx.translate(-camX, -camY);
@@ -1798,6 +1807,7 @@ export class MpSession {
         }
       }
       ctx.restore();
+      this.drawEdgeIndicators(cx, cy, vw, vh, scale, cw, ch);
     } else {
       // Letterbox: the whole arena scaled to fit, as always on big screens.
       const ox = (cw - WORLD_W * fit) / 2;
@@ -1821,6 +1831,49 @@ export class MpSession {
 
     this.drawHud();
     if (this.isTouchDevice && this.phase === 'battle') this.drawTouchControls();
+  }
+
+  /** Follow-camera only: arrows pinned to the screen edge pointing at ships
+   *  outside the viewport, in each ship's hull color — without these a zoomed
+   *  camera means attacks come out of nowhere. Submerged submarines stay
+   *  hidden, same as on the open sea. */
+  private drawEdgeIndicators(
+    cx: number,
+    cy: number,
+    vw: number,
+    vh: number,
+    scale: number,
+    cw: number,
+    ch: number,
+  ) {
+    const ctx = this.ctx;
+    const pad = 26; // arrow distance from the screen edge
+    for (let i = 0; i < this.ships.length; i++) {
+      if (i === this.you) continue;
+      const ship = this.ships[i];
+      if (!ship.alive || ship.depth > DIVE.hidden) continue;
+      const dx = wrapDelta(ship.x - cx, WORLD_W);
+      const dy = wrapDelta(ship.y - cy, WORLD_H);
+      // On screen already (with a little slack)? No arrow needed.
+      if (Math.abs(dx) < vw / 2 + 30 && Math.abs(dy) < vh / 2 + 30) continue;
+      const sx = Math.max(pad, Math.min(cw - pad, cw / 2 + dx * scale));
+      const sy = Math.max(pad, Math.min(ch - pad, ch / 2 + dy * scale));
+      const ang = Math.atan2(dy, dx);
+      ctx.save();
+      ctx.translate(sx, sy);
+      ctx.rotate(ang);
+      ctx.fillStyle = ship.hullColor;
+      ctx.strokeStyle = 'rgba(255,255,255,0.85)';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(10, 0);
+      ctx.lineTo(-7, 6.5);
+      ctx.lineTo(-7, -6.5);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+      ctx.restore();
+    }
   }
 
   /** Everything in world space: sea, islands, pickups, shots, ships, effects.
@@ -1877,16 +1930,13 @@ export class MpSession {
     this.drawWhirlpool();
   }
 
-  /** On-screen thumb buttons during multiplayer battles (touch devices). */
+  /** On-screen touch controls during multiplayer battles. */
   private drawTouchControls() {
-    const ctx = this.ctx;
-    const btns = layoutTouchButtons(this.viewW, this.viewH);
-    drawTouchBtn(ctx, btns.left, '←', this.input.isDown('ArrowLeft'));
-    drawTouchBtn(ctx, btns.right, '→', this.input.isDown('ArrowRight'));
-    drawTouchBtn(ctx, btns.fire, '🔥', this.input.isDown('Space'));
-    if (this.ships[this.you]?.type === 'submarine') {
-      drawTouchBtn(ctx, btns.dive, '🤿', this.input.isDown('ArrowDown'));
-    }
+    const sub = this.ships[this.you]?.type === 'submarine';
+    const charge = this.isHost
+      ? (this.diveCharge[this.you] ?? 0) / DIVE_MAX
+      : (this.guestCharge[this.you] ?? 0);
+    this.touch.draw(this.ctx, this.viewW, this.viewH, sub, charge);
   }
 
   /** The maelstrom: a swirling danger wash outside the calm circular eye. */
