@@ -35,7 +35,7 @@ import {
   type ShipState,
 } from './net';
 import { DIVE, gunOffsets, muzzleReach, RAM, SAIL_TYPES, Ship, SHIP_TYPES, wrapDelta, YOU_COLOR, type ShipTypeName, type Turn } from './ship';
-import { drawTouchBtn, hitBtn, layoutTouchButtons } from './touchui';
+import { drawTouchBtn, hitBtn, layoutTouchButtons, touchCapable } from './touchui';
 import { Wind } from './wind';
 import type { DataConnection } from 'peerjs';
 
@@ -135,7 +135,9 @@ const ZERO_TIMERS: Record<PickupType, number> = {
 // the camera zooms to at least FOLLOW_SCALE and tracks your ship instead —
 // the world wraps, so the view pans seamlessly with no edges to clamp against.
 const FOLLOW_BELOW = 0.5;
-const FOLLOW_SCALE = 0.8;
+// 0.6 ≈ 1.8× the visible area of the original 0.8 — playtesters wanted more
+// warning of who's approaching; below ~0.55 ships get hard to tap-read.
+const FOLLOW_SCALE = 0.6;
 
 const SNAPSHOT_INTERVAL = 1 / 30;
 const INPUT_INTERVAL = 0.05; // guest input heartbeat
@@ -379,7 +381,9 @@ export class MpSession {
   private waves: Wave[] = [];
   private looping = false;
   private lastTime = 0;
-  private readonly isTouchDevice = navigator.maxTouchPoints > 0;
+  // Not readonly: some WebViews under-report touch capability, so the first
+  // real touch event anywhere upgrades this at runtime.
+  private isTouchDevice = touchCapable();
 
   private constructor(
     isHost: boolean,
@@ -402,18 +406,26 @@ export class MpSession {
         r: 6 + Math.random() * 10,
       });
     }
-    if (this.isTouchDevice) {
-      const c = ctx.canvas;
-      c.addEventListener('touchstart', this.onTouch, { passive: true });
-      c.addEventListener('touchmove', this.onTouch, { passive: true });
-      c.addEventListener('touchend', this.onTouch, { passive: true });
-      c.addEventListener('touchcancel', this.onTouch, { passive: true });
-    }
+    // Registered regardless of detection: if a touch ever arrives, controls
+    // must work — detection only decides whether buttons show before then.
+    const c = ctx.canvas;
+    c.addEventListener('touchstart', this.onTouch, { passive: true });
+    c.addEventListener('touchmove', this.onTouch, { passive: true });
+    c.addEventListener('touchend', this.onTouch, { passive: true });
+    c.addEventListener('touchcancel', this.onTouch, { passive: true });
+    // Any touch (e.g. tapping through the lobby) proves the device is touch,
+    // so the buttons are already visible when the battle starts.
+    window.addEventListener('touchstart', this.sawTouch, { passive: true, once: true });
   }
+
+  private sawTouch = () => {
+    this.isTouchDevice = true;
+  };
 
   /** On-screen thumb controls — multiplayer battles are steerable on touch
    *  devices just like practice mode (plus a dive button for submarines). */
   private onTouch = (e: TouchEvent) => {
+    this.isTouchDevice = true;
     if (this.phase !== 'battle') return;
     const rect = this.ctx.canvas.getBoundingClientRect();
     const scaleX = this.viewW / rect.width;
@@ -596,14 +608,13 @@ export class MpSession {
     this.stopLoop();
     this.handle?.destroy();
     this.handle = null;
-    if (this.isTouchDevice) {
-      const c = this.ctx.canvas;
-      c.removeEventListener('touchstart', this.onTouch);
-      c.removeEventListener('touchmove', this.onTouch);
-      c.removeEventListener('touchend', this.onTouch);
-      c.removeEventListener('touchcancel', this.onTouch);
-      this.input.setVirtual(false, false, false, false);
-    }
+    const c = this.ctx.canvas;
+    c.removeEventListener('touchstart', this.onTouch);
+    c.removeEventListener('touchmove', this.onTouch);
+    c.removeEventListener('touchend', this.onTouch);
+    c.removeEventListener('touchcancel', this.onTouch);
+    window.removeEventListener('touchstart', this.sawTouch);
+    this.input.setVirtual(false, false, false, false);
   }
 
   // ── Host: lobby & connections ───────────────────────────────────────────────

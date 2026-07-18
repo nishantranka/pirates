@@ -3,7 +3,7 @@ import { Cannonball } from './cannonball';
 import { Explosion } from './explosion';
 import type { Input } from './input';
 import { DIVE, gunOffsets, muzzleReach, RAM, SAIL_TYPES, Ship, wrapDelta, YOU_COLOR, type ShipTypeName, type Turn } from './ship';
-import { drawTouchBtn, hitBtn, layoutTouchButtons, type TouchButtons } from './touchui';
+import { drawTouchBtn, hitBtn, layoutTouchButtons, touchCapable, type TouchButtons } from './touchui';
 import { Wind } from './wind';
 
 const MAX_DT = 0.05;
@@ -56,7 +56,9 @@ export class Game {
   /** While true another renderer (multiplayer) owns the canvas; this loop idles. */
   suspended = false;
 
-  private readonly isTouchDevice = navigator.maxTouchPoints > 0;
+  // Not readonly: some WebViews under-report touch capability, so the first
+  // real touch event anywhere upgrades this at runtime.
+  private isTouchDevice = touchCapable();
   private btns!: TouchButtons;
 
   constructor(ctx: CanvasRenderingContext2D, input: Input) {
@@ -75,12 +77,19 @@ export class Game {
       });
     }
 
-    if (this.isTouchDevice) {
-      ctx.canvas.addEventListener('touchstart', this.onTouch, { passive: true });
-      ctx.canvas.addEventListener('touchmove', this.onTouch, { passive: true });
-      ctx.canvas.addEventListener('touchend', this.onTouch, { passive: true });
-      ctx.canvas.addEventListener('touchcancel', this.onTouch, { passive: true });
-    }
+    // Registered regardless of detection: if a touch ever arrives, controls
+    // must work — detection only decides whether buttons show before then.
+    ctx.canvas.addEventListener('touchstart', this.onTouch, { passive: true });
+    ctx.canvas.addEventListener('touchmove', this.onTouch, { passive: true });
+    ctx.canvas.addEventListener('touchend', this.onTouch, { passive: true });
+    ctx.canvas.addEventListener('touchcancel', this.onTouch, { passive: true });
+    window.addEventListener(
+      'touchstart',
+      () => {
+        this.isTouchDevice = true;
+      },
+      { passive: true, once: true },
+    );
   }
 
   private updateBtnRects(w: number, h: number) {
@@ -88,6 +97,7 @@ export class Game {
   }
 
   private onTouch = (e: TouchEvent) => {
+    this.isTouchDevice = true;
     if (this.phase !== 'battle') return;
     const rect = this.ctx.canvas.getBoundingClientRect();
     const scaleX = this.viewW / rect.width;
