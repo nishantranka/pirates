@@ -451,12 +451,16 @@ function renderLobby(players: LobbyPlayerInfo[], you: number, canStart: boolean,
   btnMoreBots.disabled = players.length >= MAX_PLAYERS;
 
   const lobbyStatus = document.getElementById('lobby-status')!;
+  const readyCount = players.filter((p) => p.ready).length;
   if (players.length < 2) {
     lobbyStatus.textContent = isHost
       ? 'Waiting for captains — invite friends or add bots…'
       : 'Waiting for at least one more captain…';
-  } else if (!canStart) {
-    lobbyStatus.textContent = 'Waiting for everyone to be ready…';
+  } else if (readyCount < players.length) {
+    // Ready is advisory — the host can launch anyway and stragglers sail in as-is.
+    lobbyStatus.textContent = isHost
+      ? `${readyCount} of ${players.length} ready — start anyway and the rest sail in as-is.`
+      : `${readyCount} of ${players.length} ready — the host can start at any time.`;
   } else {
     lobbyStatus.textContent = isHost ? 'All hands ready — start when you like!' : 'All ready — the host can start.';
   }

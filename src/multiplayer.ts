@@ -566,7 +566,7 @@ export class MpSession {
     return this.mode;
   }
 
-  /** Host only: launch the battle (lobby must be all-ready with 2+ players). */
+  /** Host only: launch the battle (needs 2+ players; ready is not required). */
   startBattle() {
     if (!this.isHost || this.phase !== 'lobby' || !this.canStart()) return;
     this.beginRound();
@@ -767,8 +767,11 @@ export class MpSession {
     } satisfies H2CMsg);
   }
 
+  // Ready is a courtesy signal ("done picking my ship"), not a gate — one idle
+  // joiner must never deadlock the lobby. Unready captains sail in as-is; the
+  // start-of-round freeze and spawn shield cover them like everyone else.
   private canStart(): boolean {
-    return this.players.length >= 2 && this.players.every((p) => p.ready);
+    return this.players.length >= 2;
   }
 
   private pushLobby() {
