@@ -135,29 +135,39 @@ const WAVE_DRIFT = 14;
 const SMOOTH_RATE = 14; // guest position smoothing (higher = snappier)
 const SNAP_DIST = 250; // beyond this a target jump is a wrap/teleport — snap, don't glide
 
-export const PLAYER_COLORS = [
-  '#8b5a2b', // brown
-  '#7a1f1f', // red
-  '#2e5d34', // green
-  '#4a3d7a', // purple
-  '#b8860b', // goldenrod
-  '#1f6f7a', // teal
-  '#a34a7a', // magenta
-  '#5a6b1f', // olive
-  '#9c4a1f', // sienna
-  '#37507a', // steel blue
-  '#7a1f5a', // plum
-  '#2d7a6b', // sea green
-  '#8a2d2d', // brick
-  '#5f4a8a', // violet
-  '#7a6b1f', // mustard
-  '#1f4a7a', // navy
-  '#8a5f2d', // caramel
-  '#4a7a2d', // moss
-  '#7a2d4a', // wine
-  '#2d5f8a', // cerulean
-  '#6b2d7a', // orchid
+// Humans sail vivid hulls, bots sail greys — so the real players pop out of a
+// crowded bot fleet at a glance. (Your own hull is repainted pink locally, so
+// hot pink stays out of this palette.)
+export const HUMAN_COLORS = [
+  '#ffd23f', // yellow
+  '#3fa7ff', // blue
+  '#ff7a2e', // orange
+  '#8be04a', // lime
+  '#c77dff', // violet
+  '#ff5d5d', // coral
+  '#2ee6c8', // aqua
 ];
+
+export const BOT_COLORS = [
+  '#8d939b',
+  '#6f757d',
+  '#a7adb4',
+  '#5a6068',
+  '#98a0a8',
+  '#7b828a',
+];
+
+/** Hull/lobby color for crew slot `i`: humans cycle the vivid palette, bots the
+ *  greys. Counted per kind, so the 1st human is always yellow no matter how
+ *  many bots sit ahead of them in the roster. */
+export function crewColor(i: number, crew: Array<{ bot: boolean }>): string {
+  const me = crew[i];
+  if (!me) return '#fff';
+  let n = 0;
+  for (let k = 0; k < i; k++) if (crew[k].bot === me.bot) n++;
+  const palette = me.bot ? BOT_COLORS : HUMAN_COLORS;
+  return palette[n % palette.length];
+}
 
 const BOT_NAMES = [
   'Iron Bess',
@@ -577,7 +587,7 @@ export class MpSession {
       }
       this.players.push({
         conn,
-        name: cleanName(msg.name),
+        name: this.uniqueName(msg.name),
         ship: 'small',
         ready: false,
         connected: true,
@@ -625,6 +635,22 @@ export class MpSession {
     }
   }
 
+  /** Clean a requested name and de-dupe it against the crew, so two blank
+   *  joins become "Captain" and "Captain 2" instead of twins. */
+  private uniqueName(raw: string): string {
+    const base = cleanName(raw);
+    let candidate = base;
+    for (
+      let n = 2;
+      this.players.some((p) => p.name.toLowerCase() === candidate.toLowerCase());
+      n++
+    ) {
+      const suffix = ` ${n}`;
+      candidate = base.slice(0, 16 - suffix.length) + suffix;
+    }
+    return candidate;
+  }
+
   private canStart(): boolean {
     return this.players.length >= 2 && this.players.every((p) => p.ready);
   }
@@ -656,7 +682,7 @@ export class MpSession {
       return {
         name: p.name,
         type: p.ship,
-        color: PLAYER_COLORS[i],
+        color: crewColor(i, this.players),
         x: s.x,
         y: s.y,
         // Random heading — everyone scatters a different way. A 2 s spawn shield
