@@ -5,7 +5,8 @@
 //
 // Unlike single player (where the world IS the canvas), multiplayer uses a
 // fixed logical world so every peer sees identical geometry regardless of
-// their window size; each client letterboxes it to fit.
+// their window size; each client letterboxes it to fit — or, on small (phone)
+// screens, zooms in with a camera that follows your ship.
 
 import { angleDiff } from './ai';
 import { decideBot } from './bot';
@@ -34,6 +35,7 @@ import {
   type ShipState,
 } from './net';
 import { DIVE, gunOffsets, muzzleReach, RAM, SAIL_TYPES, Ship, SHIP_TYPES, wrapDelta, YOU_COLOR, type ShipTypeName, type Turn } from './ship';
+import { drawTouchBtn, hitBtn, layoutTouchButtons } from './touchui';
 import { Wind } from './wind';
 import type { DataConnection } from 'peerjs';
 
@@ -128,6 +130,13 @@ const ZERO_TIMERS: Record<PickupType, number> = {
   double: 0,
   machinegun: 0,
 };
+// Camera: on roomy screens the whole arena is letterboxed to fit, as before.
+// Below this fit scale (phones, tiny windows) ships turn thumbnail-sized, so
+// the camera zooms to at least FOLLOW_SCALE and tracks your ship instead —
+// the world wraps, so the view pans seamlessly with no edges to clamp against.
+const FOLLOW_BELOW = 0.5;
+const FOLLOW_SCALE = 0.8;
+
 const SNAPSHOT_INTERVAL = 1 / 30;
 const INPUT_INTERVAL = 0.05; // guest input heartbeat
 const END_DELAY = 1.7; // let the sinking animation play before declaring a winner
@@ -370,6 +379,7 @@ export class MpSession {
   private waves: Wave[] = [];
   private looping = false;
   private lastTime = 0;
+  private readonly isTouchDevice = navigator.maxTouchPoints > 0;
 
   private constructor(
     isHost: boolean,
@@ -392,7 +402,38 @@ export class MpSession {
         r: 6 + Math.random() * 10,
       });
     }
+    if (this.isTouchDevice) {
+      const c = ctx.canvas;
+      c.addEventListener('touchstart', this.onTouch, { passive: true });
+      c.addEventListener('touchmove', this.onTouch, { passive: true });
+      c.addEventListener('touchend', this.onTouch, { passive: true });
+      c.addEventListener('touchcancel', this.onTouch, { passive: true });
+    }
   }
+
+  /** On-screen thumb controls — multiplayer battles are steerable on touch
+   *  devices just like practice mode (plus a dive button for submarines). */
+  private onTouch = (e: TouchEvent) => {
+    if (this.phase !== 'battle') return;
+    const rect = this.ctx.canvas.getBoundingClientRect();
+    const scaleX = this.viewW / rect.width;
+    const scaleY = this.viewH / rect.height;
+    const btns = layoutTouchButtons(this.viewW, this.viewH);
+    let left = false;
+    let right = false;
+    let fire = false;
+    let dive = false;
+    for (const t of Array.from(e.touches)) {
+      const tx = (t.clientX - rect.left) * scaleX;
+      const ty = (t.clientY - rect.top) * scaleY;
+      if (hitBtn(btns.left, tx, ty)) left = true;
+      if (hitBtn(btns.right, tx, ty)) right = true;
+      if (hitBtn(btns.fire, tx, ty)) fire = true;
+      if (hitBtn(btns.dive, tx, ty)) dive = true;
+    }
+    const sub = this.ships[this.you]?.type === 'submarine';
+    this.input.setVirtual(left, right, fire, dive && sub);
+  };
 
   // ── Session entry points ────────────────────────────────────────────────────
 
@@ -555,6 +596,14 @@ export class MpSession {
     this.stopLoop();
     this.handle?.destroy();
     this.handle = null;
+    if (this.isTouchDevice) {
+      const c = this.ctx.canvas;
+      c.removeEventListener('touchstart', this.onTouch);
+      c.removeEventListener('touchmove', this.onTouch);
+      c.removeEventListener('touchend', this.onTouch);
+      c.removeEventListener('touchcancel', this.onTouch);
+      this.input.setVirtual(false, false, false, false);
+    }
   }
 
   // ── Host: lobby & connections ───────────────────────────────────────────────
@@ -1599,24 +1648,75 @@ export class MpSession {
     ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0); // pixel-sharp on scaled displays
     const cw = this.viewW;
     const ch = this.viewH;
-    const scale = Math.min(cw / WORLD_W, ch / WORLD_H);
-    const ox = (cw - WORLD_W * scale) / 2;
-    const oy = (ch - WORLD_H * scale) / 2;
+    const fit = Math.min(cw / WORLD_W, ch / WORLD_H);
 
-    // Letterbox backdrop.
+    // Backdrop (visible as letterbox bars; overdrawn entirely in follow mode).
     ctx.fillStyle = '#16293f';
     ctx.fillRect(0, 0, cw, ch);
 
-    ctx.save();
-    ctx.translate(ox, oy);
-    ctx.scale(scale, scale);
-    ctx.beginPath();
-    ctx.rect(0, 0, WORLD_W, WORLD_H);
-    ctx.clip();
+    // Sample wakes once per frame (not once per drawn tile).
+    const now = performance.now();
+    for (const ship of this.ships) this.updateWake(ship, now);
 
-    // Sea + waves.
-    ctx.fillStyle = '#2e6da6';
-    ctx.fillRect(0, 0, WORLD_W, WORLD_H);
+    const me = this.ships[this.you];
+    if (fit < FOLLOW_BELOW && me) {
+      // The whole view is open sea — painting it once here (not per tile)
+      // avoids a hairline seam where wrapped tiles meet.
+      ctx.fillStyle = '#2e6da6';
+      ctx.fillRect(0, 0, cw, ch);
+      // Follow camera (phones / tiny windows): zoom in and keep your ship
+      // centered. Floors at "one world tile fills the screen" per axis, so the
+      // viewport never exceeds the world and at most 2×2 wrapped tiles show.
+      const scale = Math.max(FOLLOW_SCALE, cw / WORLD_W, ch / WORLD_H);
+      const vw = cw / scale;
+      const vh = ch / scale;
+      const camX = (((me.x - vw / 2) % WORLD_W) + WORLD_W) % WORLD_W;
+      const camY = (((me.y - vh / 2) % WORLD_H) + WORLD_H) % WORLD_H;
+      ctx.save();
+      ctx.scale(scale, scale);
+      ctx.translate(-camX, -camY);
+      const xs = camX + vw > WORLD_W ? [0, WORLD_W] : [0];
+      const ys = camY + vh > WORLD_H ? [0, WORLD_H] : [0];
+      for (const tx of xs) {
+        for (const ty of ys) {
+          ctx.save();
+          ctx.translate(tx, ty);
+          this.drawWorld(now);
+          ctx.restore();
+        }
+      }
+      ctx.restore();
+    } else {
+      // Letterbox: the whole arena scaled to fit, as always on big screens.
+      const ox = (cw - WORLD_W * fit) / 2;
+      const oy = (ch - WORLD_H * fit) / 2;
+      ctx.save();
+      ctx.translate(ox, oy);
+      ctx.scale(fit, fit);
+      ctx.beginPath();
+      ctx.rect(0, 0, WORLD_W, WORLD_H);
+      ctx.clip();
+      ctx.fillStyle = '#2e6da6';
+      ctx.fillRect(0, 0, WORLD_W, WORLD_H);
+      this.drawWorld(now);
+      ctx.restore();
+
+      // World border so the wrap edge is visible.
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.25)';
+      ctx.lineWidth = 2;
+      ctx.strokeRect(ox, oy, WORLD_W * fit, WORLD_H * fit);
+    }
+
+    this.drawHud();
+    if (this.isTouchDevice && this.phase === 'battle') this.drawTouchControls();
+  }
+
+  /** Everything in world space: sea, islands, pickups, shots, ships, effects.
+   *  Called once per visible wrapped tile with the transform already set. */
+  private drawWorld(now: number) {
+    const ctx = this.ctx;
+
+    // Waves (the sea itself is painted by render(), once for the whole view).
     ctx.strokeStyle = 'rgba(255, 255, 255, 0.18)';
     ctx.lineWidth = 1.5;
     for (const wave of this.waves) {
@@ -1640,11 +1740,7 @@ export class MpSession {
     }
 
     // Fading wakes first, so hulls draw over them.
-    const now = performance.now();
-    for (const ship of this.ships) {
-      this.updateWake(ship, now);
-      this.drawWake(ship, now);
-    }
+    for (const ship of this.ships) this.drawWake(ship, now);
 
     this.ships.forEach((ship, i) => {
       // A submerged submarine is invisible to everyone but its own captain.
@@ -1667,15 +1763,18 @@ export class MpSession {
     for (const sp of this.splashes) sp.draw(ctx);
 
     this.drawWhirlpool();
+  }
 
-    ctx.restore();
-
-    // World border so the wrap edge is visible.
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.25)';
-    ctx.lineWidth = 2;
-    ctx.strokeRect(ox, oy, WORLD_W * scale, WORLD_H * scale);
-
-    this.drawHud();
+  /** On-screen thumb buttons during multiplayer battles (touch devices). */
+  private drawTouchControls() {
+    const ctx = this.ctx;
+    const btns = layoutTouchButtons(this.viewW, this.viewH);
+    drawTouchBtn(ctx, btns.left, '←', this.input.isDown('ArrowLeft'));
+    drawTouchBtn(ctx, btns.right, '→', this.input.isDown('ArrowRight'));
+    drawTouchBtn(ctx, btns.fire, '🔥', this.input.isDown('Space'));
+    if (this.ships[this.you]?.type === 'submarine') {
+      drawTouchBtn(ctx, btns.dive, '🤿', this.input.isDown('ArrowDown'));
+    }
   }
 
   /** The maelstrom: a swirling danger wash outside the calm circular eye. */
