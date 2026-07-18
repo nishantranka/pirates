@@ -3,7 +3,7 @@ import { Cannonball } from './cannonball';
 import { Explosion } from './explosion';
 import type { Input } from './input';
 import { DIVE, gunOffsets, muzzleReach, RAM, SAIL_TYPES, Ship, wrapDelta, YOU_COLOR, type ShipTypeName, type Turn } from './ship';
-import { drawTouchBtn, hitBtn, layoutTouchButtons, touchCapable, type TouchButtons } from './touchui';
+import { haptic, requestGameFullscreen, TouchControls, touchCapable } from './touchui';
 import { Wind } from './wind';
 
 const MAX_DT = 0.05;
@@ -59,7 +59,7 @@ export class Game {
   // Not readonly: some WebViews under-report touch capability, so the first
   // real touch event anywhere upgrades this at runtime.
   private isTouchDevice = touchCapable();
-  private btns!: TouchButtons;
+  private touch = new TouchControls();
 
   constructor(ctx: CanvasRenderingContext2D, input: Input) {
     this.ctx = ctx;
@@ -67,7 +67,6 @@ export class Game {
 
     const w = this.viewW;
     const h = this.viewH;
-    this.updateBtnRects(w, h);
 
     for (let i = 0; i < 40; i++) {
       this.waves.push({
@@ -92,32 +91,18 @@ export class Game {
     );
   }
 
-  private updateBtnRects(w: number, h: number) {
-    this.btns = layoutTouchButtons(w, h);
-  }
-
   private onTouch = (e: TouchEvent) => {
     this.isTouchDevice = true;
-    if (this.phase !== 'battle') return;
-    const rect = this.ctx.canvas.getBoundingClientRect();
-    const scaleX = this.viewW / rect.width;
-    const scaleY = this.viewH / rect.height;
-    let left = false;
-    let right = false;
-    let fire = false;
-    let dive = false;
-    for (const t of Array.from(e.touches)) {
-      const tx = (t.clientX - rect.left) * scaleX;
-      const ty = (t.clientY - rect.top) * scaleY;
-      if (hitBtn(this.btns.left, tx, ty)) left = true;
-      if (hitBtn(this.btns.right, tx, ty)) right = true;
-      if (hitBtn(this.btns.fire, tx, ty)) fire = true;
-      if (hitBtn(this.btns.dive, tx, ty)) dive = true;
+    if (this.phase !== 'battle') {
+      this.touch.reset();
+      return;
     }
-    this.input.setVirtual(left, right, fire, dive && this.player?.type === 'submarine');
+    this.touch.update(e, this.ctx.canvas, this.viewW, this.viewH, this.player?.type === 'submarine');
   };
 
   startBattle(playerType: ShipTypeName, enemyType: ShipTypeName | 'random', difficulty: DifficultyName) {
+    // Called from a menu tap, so the fullscreen request has gesture context.
+    if (this.isTouchDevice) void requestGameFullscreen();
     const w = this.viewW;
     const h = this.viewH;
     let resolvedEnemy = enemyType;
@@ -183,7 +168,6 @@ export class Game {
   }
 
   onResize(w: number, h: number) {
-    this.updateBtnRects(w, h);
     this.waves.forEach((wave) => {
       wave.x = Math.random() * w;
       wave.y = Math.random() * h;
@@ -222,6 +206,11 @@ export class Game {
       wave.x = (wave.x + wdx + w) % w;
       wave.y = (wave.y + wdy + h) % h;
     }
+
+    // Touch steering resolves against the current heading every frame so the
+    // ship settles on the dragged direction instead of orbiting it.
+    const tt = this.touch.turn(this.player.heading);
+    this.input.setVirtual(tt === -1, tt === 1, this.touch.fire, this.touch.dive);
 
     let turn: Turn = 0;
     if (this.input.isDown('ArrowLeft') || this.input.isDown('KeyA')) turn = -1;
@@ -263,6 +252,7 @@ export class Game {
         if (this.player.type === 'submarine') this.fireTorpedo();
         else this.fireBroadside(this.player, PLAYER_RELOAD);
         this.onCannonFire?.();
+        haptic(15);
       }
       if (!playerHidden && wantsToFire(this.enemy, this.player, aiOpts) && this.enemy.reload <= 0) {
         this.fireBroadside(this.enemy, diff.reload);
@@ -412,7 +402,15 @@ export class Game {
     if (this.survivorKills !== null) this.drawKillCounter();
     this.drawWindIndicator();
 
-    if (this.isTouchDevice && !this.over) this.drawTouchButtons();
+    if (this.isTouchDevice && !this.over) {
+      this.touch.draw(
+        ctx,
+        this.viewW,
+        this.viewH,
+        this.player?.type === 'submarine',
+        this.diveCharge / DIVE.max,
+      );
+    }
   }
 
   private drawSea() {
@@ -429,16 +427,6 @@ export class Game {
       ctx.beginPath();
       ctx.arc(wave.x, wave.y, wave.r, Math.PI * 0.15, Math.PI * 0.85);
       ctx.stroke();
-    }
-  }
-
-  private drawTouchButtons() {
-    const ctx = this.ctx;
-    drawTouchBtn(ctx, this.btns.left, '←', this.input.isDown('ArrowLeft'));
-    drawTouchBtn(ctx, this.btns.right, '→', this.input.isDown('ArrowRight'));
-    drawTouchBtn(ctx, this.btns.fire, '🔥', this.input.isDown('Space'));
-    if (this.player?.type === 'submarine') {
-      drawTouchBtn(ctx, this.btns.dive, '🤿', this.input.isDown('ArrowDown'));
     }
   }
 
