@@ -89,6 +89,9 @@ export type H2CMsg =
   | { t: 'reject'; reason: string }
   | { t: 'lobby'; players: LobbyPlayerInfo[]; you: number; mode: MpMode }
   | { t: 'start'; islands: IslandData[]; ships: ShipSpawn[]; you: number; mode: MpMode }
+  // Mid-battle roster growth: a captain joined late; existing clients extend
+  // their ship lists in place (indices never shrink or reorder mid-round).
+  | { t: 'roster'; ships: ShipSpawn[] }
   | {
       t: 'state';
       ships: ShipState[];
@@ -144,6 +147,12 @@ export function createHostPeer(cb: {
     peer.on('connection', (conn) => {
       if (!destroyed) cb.onConnection(conn);
     });
+    // The signaling socket drops whenever the tab is backgrounded (e.g. the
+    // host switches apps to text the invite link). Existing peers keep playing
+    // over WebRTC, but NEW joins need the broker — so always reconnect.
+    peer.on('disconnected', () => {
+      if (!destroyed) peer?.reconnect();
+    });
     peer.on('error', (err) => {
       if (destroyed) return;
       const type = (err as { type?: string }).type;
@@ -171,6 +180,11 @@ export function createHostPeer(cb: {
   };
 }
 
+// If the data channel hasn't opened by then, the join has failed (usually a
+// NAT/firewall combination WebRTC can't cross, or a host that vanished) —
+// without this the guest would sit at "Joining…" forever with no error.
+const JOIN_TIMEOUT = 20_000; // ms
+
 /** Join a room by code. onOpen fires once the data channel is usable. */
 export function createGuestPeer(
   code: string,
@@ -181,16 +195,32 @@ export function createGuestPeer(
 ): PeerHandle {
   const peer = new Peer();
   let destroyed = false;
+  let opened = false;
+
+  const timeout = setTimeout(() => {
+    if (destroyed || opened) return;
+    cb.onError(
+      'Could not reach the room — the host may be offline, or one of your networks is blocking the connection. Try again, ideally on the same Wi-Fi as the host.',
+    );
+  }, JOIN_TIMEOUT);
 
   peer.on('open', () => {
     if (destroyed) return;
     const conn = peer.connect(ID_PREFIX + code.toUpperCase().trim(), { reliable: true });
     conn.on('open', () => {
+      opened = true;
+      clearTimeout(timeout);
       if (!destroyed) cb.onOpen(conn);
     });
   });
+  peer.on('disconnected', () => {
+    // Signaling dropped mid-handshake (backgrounded tab, flaky network) —
+    // reconnect so the join can still complete before the timeout.
+    if (!destroyed && !opened) peer.reconnect();
+  });
   peer.on('error', (err) => {
     if (destroyed) return;
+    clearTimeout(timeout);
     const type = (err as { type?: string }).type;
     cb.onError(type === 'peer-unavailable' ? 'Room not found — check the code.' : friendly(type));
   });
@@ -198,6 +228,7 @@ export function createGuestPeer(
   return {
     destroy() {
       destroyed = true;
+      clearTimeout(timeout);
       peer.destroy();
     },
   };
