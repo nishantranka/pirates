@@ -3,6 +3,7 @@ import { Cannonball } from './cannonball';
 import { Explosion } from './explosion';
 import type { Input } from './input';
 import { DIVE, gunOffsets, muzzleReach, RAM, SAIL_TYPES, Ship, wrapDelta, YOU_COLOR, type ShipTypeName, type Turn } from './ship';
+import { drawTouchBtn, hitBtn, layoutTouchButtons, type TouchButtons } from './touchui';
 import { Wind } from './wind';
 
 const MAX_DT = 0.05;
@@ -20,21 +21,10 @@ export type DifficultyName = keyof typeof DIFFICULTIES;
 const PLAYER_COLOR = YOU_COLOR; // your ship is always pink — easy to spot
 const ENEMY_COLOR = '#7a1f1f';
 
-// Touch button dimensions — large enough for thumbs.
-const BTN_SIZE = 72;
-const BTN_MARGIN = 24;
-
 interface Wave {
   x: number;
   y: number;
   r: number;
-}
-
-interface BtnRect {
-  x: number;
-  y: number;
-  w: number;
-  h: number;
 }
 
 export class Game {
@@ -67,9 +57,7 @@ export class Game {
   suspended = false;
 
   private readonly isTouchDevice = navigator.maxTouchPoints > 0;
-  private btnLeft!: BtnRect;
-  private btnRight!: BtnRect;
-  private btnFire!: BtnRect;
+  private btns!: TouchButtons;
 
   constructor(ctx: CanvasRenderingContext2D, input: Input) {
     this.ctx = ctx;
@@ -96,14 +84,7 @@ export class Game {
   }
 
   private updateBtnRects(w: number, h: number) {
-    const by = h - BTN_MARGIN - BTN_SIZE;
-    this.btnLeft = { x: BTN_MARGIN, y: by, w: BTN_SIZE, h: BTN_SIZE };
-    this.btnRight = { x: w - BTN_MARGIN - BTN_SIZE, y: by, w: BTN_SIZE, h: BTN_SIZE };
-    this.btnFire = { x: w / 2 - BTN_SIZE / 2, y: by, w: BTN_SIZE, h: BTN_SIZE };
-  }
-
-  private hitBtn(btn: BtnRect, tx: number, ty: number): boolean {
-    return tx >= btn.x && tx <= btn.x + btn.w && ty >= btn.y && ty <= btn.y + btn.h;
+    this.btns = layoutTouchButtons(w, h);
   }
 
   private onTouch = (e: TouchEvent) => {
@@ -114,14 +95,16 @@ export class Game {
     let left = false;
     let right = false;
     let fire = false;
+    let dive = false;
     for (const t of Array.from(e.touches)) {
       const tx = (t.clientX - rect.left) * scaleX;
       const ty = (t.clientY - rect.top) * scaleY;
-      if (this.hitBtn(this.btnLeft, tx, ty)) left = true;
-      if (this.hitBtn(this.btnRight, tx, ty)) right = true;
-      if (this.hitBtn(this.btnFire, tx, ty)) fire = true;
+      if (hitBtn(this.btns.left, tx, ty)) left = true;
+      if (hitBtn(this.btns.right, tx, ty)) right = true;
+      if (hitBtn(this.btns.fire, tx, ty)) fire = true;
+      if (hitBtn(this.btns.dive, tx, ty)) dive = true;
     }
-    this.input.setVirtual(left, right, fire);
+    this.input.setVirtual(left, right, fire, dive && this.player?.type === 'submarine');
   };
 
   startBattle(playerType: ShipTypeName, enemyType: ShipTypeName | 'random', difficulty: DifficultyName) {
@@ -441,27 +424,12 @@ export class Game {
 
   private drawTouchButtons() {
     const ctx = this.ctx;
-
-    const drawBtn = (btn: BtnRect, label: string, active: boolean) => {
-      ctx.fillStyle = active ? 'rgba(255,255,255,0.45)' : 'rgba(0,0,0,0.35)';
-      ctx.strokeStyle = 'rgba(255,255,255,0.6)';
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.roundRect(btn.x, btn.y, btn.w, btn.h, 14);
-      ctx.fill();
-      ctx.stroke();
-
-      ctx.fillStyle = '#fff';
-      ctx.font = 'bold 28px system-ui, sans-serif';
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillText(label, btn.x + btn.w / 2, btn.y + btn.h / 2);
-    };
-
-    const v = { left: this.input.isDown('ArrowLeft'), right: this.input.isDown('ArrowRight'), fire: this.input.isDown('Space') };
-    drawBtn(this.btnLeft, '←', v.left);
-    drawBtn(this.btnRight, '→', v.right);
-    drawBtn(this.btnFire, '🔥', v.fire);
+    drawTouchBtn(ctx, this.btns.left, '←', this.input.isDown('ArrowLeft'));
+    drawTouchBtn(ctx, this.btns.right, '→', this.input.isDown('ArrowRight'));
+    drawTouchBtn(ctx, this.btns.fire, '🔥', this.input.isDown('Space'));
+    if (this.player?.type === 'submarine') {
+      drawTouchBtn(ctx, this.btns.dive, '🤿', this.input.isDown('ArrowDown'));
+    }
   }
 
   private drawHealthRow(label: string, ship: Ship, row: number) {

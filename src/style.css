@@ -9,12 +9,15 @@ body {
   margin: 0;
   height: 100%;
   overflow: hidden;
+  overscroll-behavior: none;
   font-family: system-ui, sans-serif;
   -webkit-tap-highlight-color: transparent;
 }
 
 canvas {
   display: block;
+  /* the game handles its own touch input — no scrolling/zoom gestures */
+  touch-action: none;
 }
 
 /* ── Overlays ─────────────────────────────────────────────────────────────── */
@@ -401,7 +404,8 @@ canvas {
   border-radius: 10px;
   color: #fff;
   font-family: inherit;
-  font-size: 15px;
+  /* ≥16px so iOS doesn't auto-zoom the page when the field is focused */
+  font-size: 16px;
   padding: 9px 12px;
   text-align: center;
   min-height: 44px;

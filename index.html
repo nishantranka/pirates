@@ -2,7 +2,9 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+    <!-- maximum-scale=1 keeps iOS from auto-zooming the page when a form input is
+         focused (and from staying zoomed afterward, which cropped the game). -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
     <!-- Always revalidate the HTML so a redeploy's new hashed assets are picked
          up immediately; otherwise a cached page can point at a deleted bundle. -->
     <meta http-equiv="Cache-Control" content="no-cache, must-revalidate" />
