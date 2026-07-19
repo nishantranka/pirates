@@ -3,7 +3,7 @@ import { Cannonball } from './cannonball';
 import { Explosion } from './explosion';
 import type { Input } from './input';
 import { DIVE, gunOffsets, muzzleReach, RAM, SAIL_TYPES, Ship, wrapDelta, YOU_COLOR, type ShipTypeName, type Turn } from './ship';
-import { ARRIVE_RADIUS, drawBuoy, haptic, requestGameFullscreen, TouchControls, touchCapable, turnToward } from './touchui';
+import { ARRIVE_RADIUS, autoFireWanted, drawBuoy, drawThreatArc, haptic, incomingThreats, requestGameFullscreen, TouchControls, touchCapable, turnToward } from './touchui';
 import { Wind } from './wind';
 
 const MAX_DT = 0.05;
@@ -223,7 +223,26 @@ export class Game {
       if (!this.touch.steerPt && Math.hypot(dx, dy) < ARRIVE_RADIUS) this.buoy = null;
       else tt = turnToward(Math.atan2(dy, dx), this.player.heading);
     }
-    this.input.setVirtual(tt === -1, tt === 1, this.touch.fire, this.touch.dive);
+    // Guns autofire on touch; the usual reload rules still apply below.
+    const auto =
+      this.isTouchDevice &&
+      !this.over &&
+      autoFireWanted(
+        this.player,
+        this.player.type === 'submarine',
+        [
+          {
+            x: this.enemy.x,
+            y: this.enemy.y,
+            alive: this.enemy.alive,
+            hidden: this.enemy.depth > DIVE.hidden,
+            shielded: false,
+          },
+        ],
+        w,
+        h,
+      );
+    this.input.setVirtual(tt === -1, tt === 1, auto, this.touch.dive);
 
     let turn: Turn = 0;
     if (this.input.isDown('ArrowLeft') || this.input.isDown('KeyA')) turn = -1;
@@ -405,6 +424,13 @@ export class Game {
       ctx.fillRect(this.player.x - w2 / 2, y, (w2 * this.diveCharge) / DIVE.max, 3);
     }
     for (const ex of this.explosions) ex.draw(ctx);
+
+    // Mobile assist: flag shots that are about to reach you.
+    if (this.isTouchDevice && !this.over && this.player.alive) {
+      for (const bearing of incomingThreats(this.player, this.cannonballs, this.viewW, this.viewH)) {
+        drawThreatArc(ctx, this.player.x, this.player.y, this.player.length * 0.85, bearing);
+      }
+    }
 
     this.drawHealthRow(`You (${this.player.type})`, this.player, 0);
     this.drawHealthRow(

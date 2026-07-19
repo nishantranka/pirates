@@ -36,7 +36,7 @@ import {
 } from './net';
 import { DIVE, gunOffsets, muzzleReach, RAM, SAIL_TYPES, Ship, SHIP_TYPES, wrapDelta, YOU_COLOR, type ShipTypeName, type Turn } from './ship';
 import type { GameSounds } from './sounds';
-import { ARRIVE_RADIUS, drawBuoy, haptic, TouchControls, touchCapable, turnToward } from './touchui';
+import { ARRIVE_RADIUS, autoFireWanted, drawBuoy, drawThreatArc, haptic, incomingThreats, TouchControls, touchCapable, turnToward } from './touchui';
 import { Wind } from './wind';
 import type { DataConnection } from 'peerjs';
 
@@ -463,7 +463,22 @@ export class MpSession {
       else tt = turnToward(Math.atan2(dy, dx), me.heading);
     }
     const sub = me.type === 'submarine';
-    this.input.setVirtual(tt === -1, tt === 1, this.touch.fire, this.touch.dive && sub);
+    // Guns autofire on touch — the host applies the same reload/range rules
+    // as for keyboard players, this only supplies the input.
+    const auto = autoFireWanted(
+      me,
+      sub,
+      this.ships.map((s, i) => ({
+        x: s.x,
+        y: s.y,
+        alive: i !== this.you && s.alive,
+        hidden: s.depth > DIVE.hidden,
+        shielded: this.buffView[i]?.inv ?? false,
+      })),
+      WORLD_W,
+      WORLD_H,
+    );
+    this.input.setVirtual(tt === -1, tt === 1, auto, this.touch.dive && sub);
   }
 
   // ── Session entry points ────────────────────────────────────────────────────
@@ -2030,6 +2045,18 @@ export class MpSession {
 
     for (const ex of this.explosions) ex.draw(ctx);
     for (const sp of this.splashes) sp.draw(ctx);
+
+    // Mobile assist: flag shots that are about to reach you — on a phone you
+    // can't dodge what you can't see.
+    if (this.isTouchDevice && this.phase === 'battle') {
+      const meS = this.ships[this.you];
+      if (meS?.alive) {
+        const balls = this.isHost ? this.balls : this.ballStates;
+        for (const bearing of incomingThreats(meS, balls, WORLD_W, WORLD_H)) {
+          drawThreatArc(ctx, meS.x, meS.y, meS.length * 0.85, bearing);
+        }
+      }
+    }
 
     this.drawWhirlpool();
   }
