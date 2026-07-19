@@ -18,6 +18,10 @@ export const DIFFICULTIES = {
 
 export type DifficultyName = keyof typeof DIFFICULTIES;
 
+// Steering-wheel hub: touches closer than this to the screen center don't
+// steer, so a thumb resting mid-screen can't jitter the helm.
+const WHEEL_DEADZONE = 40;
+
 const PLAYER_COLOR = YOU_COLOR; // your ship is always pink — easy to spot
 const ENEMY_COLOR = '#7a1f1f';
 
@@ -209,14 +213,14 @@ export class Game {
       wave.y = (wave.y + wdy + h) % h;
     }
 
-    // The screen is the helm: while a finger is down, turn toward its current
-    // position. On release there is no retained target, so the current heading
-    // simply carries on.
+    // The screen is a steering wheel: the finger's direction from the screen
+    // center IS the desired compass heading — not a place to sail to. On
+    // release there is no retained target; the current heading carries on.
     let tt: -1 | 0 | 1 = 0;
     if (this.touch.steerPt) {
-      const dx = wrapDelta(this.touch.steerPt.x - this.player.x, w);
-      const dy = wrapDelta(this.touch.steerPt.y - this.player.y, h);
-      tt = turnToward(Math.atan2(dy, dx), this.player.heading);
+      const dx = this.touch.steerPt.x - w / 2;
+      const dy = this.touch.steerPt.y - h / 2;
+      if (Math.hypot(dx, dy) > WHEEL_DEADZONE) tt = turnToward(Math.atan2(dy, dx), this.player.heading);
     }
     this.input.setVirtual(tt === -1, tt === 1, this.touch.consumeFire(), this.touch.dive);
 

@@ -145,6 +145,9 @@ const FOLLOW_SCALE = 0.6;
 // The camera leads the ship by this many world px along its heading, so there
 // is more sea ahead (where fights happen) than behind.
 const CAM_LOOKAHEAD = 70;
+// Steering-wheel hub: touches closer than this to the screen center don't
+// steer, so a thumb resting mid-screen can't jitter the helm.
+const WHEEL_DEADZONE = 40;
 
 const SNAPSHOT_INTERVAL = 1 / 30;
 const INPUT_INTERVAL = 0.05; // guest input heartbeat
@@ -441,15 +444,16 @@ export class MpSession {
     this.touch.update(e, this.ctx.canvas, this.viewW, this.viewH, sub);
   };
 
-  /** Map the steering finger through the active camera and turn toward its
-   *  current world position. Releasing it leaves the current heading alone. */
-  private steerFromTouch(me: Ship, toWorld: (sx: number, sy: number) => { x: number; y: number }) {
+  /** The screen is a steering wheel: the finger's direction from the screen
+   *  center IS the desired compass heading — pure direction, no camera math,
+   *  identical in both camera modes. Releasing leaves the heading alone. */
+  private steerFromTouch(me: Ship) {
     let tt: -1 | 0 | 1 = 0;
-    if (this.touch.steerPt) {
-      const p = toWorld(this.touch.steerPt.x, this.touch.steerPt.y);
-      const dx = wrapDelta(p.x - me.x, WORLD_W);
-      const dy = wrapDelta(p.y - me.y, WORLD_H);
-      tt = turnToward(Math.atan2(dy, dx), me.heading);
+    const pt = this.touch.steerPt;
+    if (pt) {
+      const dx = pt.x - this.viewW / 2;
+      const dy = pt.y - this.viewH / 2;
+      if (Math.hypot(dx, dy) > WHEEL_DEADZONE) tt = turnToward(Math.atan2(dy, dx), me.heading);
     }
     const sub = me.type === 'submarine';
     this.input.setVirtual(
@@ -1852,6 +1856,9 @@ export class MpSession {
 
     const me = this.ships[this.you];
 
+    // Steering is pure screen direction, so it's camera-independent.
+    if (this.isTouchDevice && this.phase === 'battle' && me) this.steerFromTouch(me);
+
     if (fit < FOLLOW_BELOW && me) {
       // The whole view is open sea — painting it once here (not per tile)
       // avoids a hairline seam where wrapped tiles meet.
@@ -1868,9 +1875,6 @@ export class MpSession {
       const cy = me.y + Math.sin(me.heading) * CAM_LOOKAHEAD;
       const camX = (((cx - vw / 2) % WORLD_W) + WORLD_W) % WORLD_W;
       const camY = (((cy - vh / 2) % WORLD_H) + WORLD_H) % WORLD_H;
-      if (this.isTouchDevice && this.phase === 'battle') {
-        this.steerFromTouch(me, (sx, sy) => ({ x: camX + sx / scale, y: camY + sy / scale }));
-      }
       ctx.save();
       ctx.scale(scale, scale);
       ctx.translate(-camX, -camY);
@@ -1906,14 +1910,6 @@ export class MpSession {
       ctx.lineWidth = 2;
       ctx.strokeRect(ox, oy, WORLD_W * fit, WORLD_H * fit);
 
-      // Touch on a big screen (tablet letterbox): map the steering finger into
-      // the arena, clamping touches in the letterbox bars to the world edge.
-      if (this.isTouchDevice && this.phase === 'battle' && me) {
-        this.steerFromTouch(me, (sx, sy) => ({
-          x: Math.min(WORLD_W - 1, Math.max(0, (sx - ox) / fit)),
-          y: Math.min(WORLD_H - 1, Math.max(0, (sy - oy) / fit)),
-        }));
-      }
     }
 
     this.drawHud();
