@@ -74,7 +74,7 @@ export type GameEvent =
   | { e: 'fire'; by: number }
   | { e: 'hit'; x: number; y: number; by: number; on: number }
   | { e: 'splash'; x: number; y: number }
-  | { e: 'grab'; x: number; y: number; p: PickupType }
+  | { e: 'grab'; x: number; y: number; p: PickupType; by: number }
   | { e: 'block'; x: number; y: number };
 
 /** Guest → host. */
