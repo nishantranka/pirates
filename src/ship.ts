@@ -93,6 +93,9 @@ export class Ship {
   /** Renderer hint: double-broadside power-up active — gun stubs appear on
    *  BOTH gunwales, longer and glowing gold, while it runs. */
   gunHighlight = false;
+  /** When this ship last took a hit (performance.now() ms) — the renderer
+   *  flashes a short gold burst under the hull so hits read at a glance. */
+  hitFlashAt = -Infinity;
 
   readonly type: ShipTypeName;
   readonly length: number;
@@ -121,6 +124,7 @@ export class Ship {
   }
 
   takeHit(amount = 1) {
+    if (amount > 0) this.hitFlashAt = performance.now();
     this.health = Math.max(0, this.health - amount);
   }
 
@@ -198,6 +202,16 @@ export class Ship {
     // Sinking fades the hull; a diving submarine dims and shrinks slightly.
     ctx.globalAlpha = (1 - this.sinkProgress) * (1 - 0.45 * this.depth);
     ctx.translate(this.x, this.y);
+
+    // Fresh-hit burst: a gold flash under the hull, fading out fast.
+    const flash = 1 - (performance.now() - this.hitFlashAt) / 250;
+    if (flash > 0) {
+      ctx.fillStyle = `rgba(255, 210, 63, ${0.65 * flash})`;
+      ctx.beginPath();
+      ctx.arc(0, 0, Math.max(this.length * 0.55, 20), 0, Math.PI * 2);
+      ctx.fill();
+    }
+
     ctx.rotate(this.heading);
     const dive = 1 - 0.15 * this.depth;
     ctx.scale(dive, dive);
