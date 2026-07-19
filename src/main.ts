@@ -248,7 +248,8 @@ document.getElementById('set-sail')!.addEventListener('click', setSail);
 // ── Game-over handling ────────────────────────────────────────────────────────
 
 game.onGameOver = (won: boolean) => {
-  sounds.sunk(); // someone went down either way — yours or theirs
+  if (won) sounds.kill();
+  else sounds.sunk();
   if (selectedPractice === 'survivor') {
     if (won) {
       // Enemy sunk — spawn the next wave without showing the game-over overlay.

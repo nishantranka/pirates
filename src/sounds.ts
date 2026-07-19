@@ -4,13 +4,16 @@
 // be re-pitched in code later. The AudioContext is created lazily on the
 // first cue, which always happens after a user gesture (starting a battle).
 
+// Every cue is strictly first-person — with 20 captains at sea, other people's
+// shots, misses and sinkings are just noise. You hear only what YOU did or
+// what happened TO you, and the kill fanfare is the loudest, proudest cue.
 export interface GameSounds {
   fire(): void; // you fired
   myHit(): void; // your shot/ram landed on someone
   getHit(): void; // you took a hit
-  splash(): void; // a cannonball missed into the sea (throttled; any ship's)
   pickup(): void; // you grabbed a power-up
-  sunk(): void; // a ship went down (any ship — it's a big moment)
+  kill(): void; // you sank someone — the reward cue
+  sunk(): void; // YOUR ship went down
 }
 
 export function createSounds(isMuted: () => boolean): GameSounds {
@@ -70,8 +73,6 @@ export function createSounds(isMuted: () => boolean): GameSounds {
     src.start(t);
   }
 
-  let lastSplash = 0;
-
   return {
     // Firing is the most frequent cue, so it sits a notch under the lab level.
     fire() {
@@ -88,17 +89,15 @@ export function createSounds(isMuted: () => boolean): GameSounds {
       tone({ type: 'sawtooth', f0: 170, f1: 55, dur: 0.28, vol: 0.5 });
       burst({ dur: 0.2, f0: 900, f1: 200, vol: 0.4 });
     },
-    // Splashes come from every ship, so they're quiet and rate-limited.
-    splash() {
-      if (isMuted()) return;
-      const now = performance.now();
-      if (now - lastSplash < 150) return;
-      lastSplash = now;
-      burst({ dur: 0.16, type: 'highpass', f0: 2200, vol: 0.2 });
-    },
     pickup() {
       if (isMuted()) return;
       [660, 880, 1320].forEach((f, i) => tone({ type: 'square', f0: f, dur: 0.07, vol: 0.22, at: i * 0.06 }));
+    },
+    // The star of the set: a quick rising victory arpeggio with a sparkle tail.
+    kill() {
+      if (isMuted()) return;
+      [392, 523, 659, 784].forEach((f, i) => tone({ type: 'square', f0: f, dur: 0.09, vol: 0.3, at: i * 0.07 }));
+      burst({ dur: 0.25, type: 'highpass', f0: 1800, vol: 0.2, at: 0.28 });
     },
     sunk() {
       if (isMuted()) return;
