@@ -3,7 +3,7 @@ import { Cannonball } from './cannonball';
 import { Explosion } from './explosion';
 import type { Input } from './input';
 import { DIVE, gunOffsets, muzzleReach, RAM, SAIL_TYPES, Ship, wrapDelta, YOU_COLOR, type ShipTypeName, type Turn } from './ship';
-import { ARRIVE_RADIUS, autoFireWanted, drawBuoy, drawThreatArc, haptic, incomingThreats, requestGameFullscreen, TouchControls, touchCapable, turnToward } from './touchui';
+import { drawThreatArc, haptic, incomingThreats, requestGameFullscreen, TouchControls, touchCapable, turnToward } from './touchui';
 import { Wind } from './wind';
 
 const MAX_DT = 0.05;
@@ -60,8 +60,6 @@ export class Game {
   // real touch event anywhere upgrades this at runtime.
   private isTouchDevice = touchCapable();
   private touch = new TouchControls();
-  /** Tap-to-sail course marker (world px; practice world == screen). */
-  private buoy: { x: number; y: number } | null = null;
 
   constructor(ctx: CanvasRenderingContext2D, input: Input) {
     this.ctx = ctx;
@@ -97,7 +95,6 @@ export class Game {
     this.isTouchDevice = true;
     if (this.phase !== 'battle') {
       this.touch.reset();
-      this.buoy = null;
       this.input.setVirtual(false, false, false, false);
       return;
     }
@@ -107,7 +104,7 @@ export class Game {
   startBattle(playerType: ShipTypeName, enemyType: ShipTypeName | 'random', difficulty: DifficultyName) {
     // Called from a menu tap, so the fullscreen request has gesture context.
     if (this.isTouchDevice) void requestGameFullscreen();
-    this.buoy = null;
+    this.touch.reset();
     const w = this.viewW;
     const h = this.viewH;
     let resolvedEnemy = enemyType;
@@ -212,37 +209,16 @@ export class Game {
       wave.y = (wave.y + wdy + h) % h;
     }
 
-    // Tap-to-sail: a touched point becomes the course buoy (chased live while
-    // the finger is down); the ship steers itself there, sails through, and
-    // carries straight on — ships never stop, so the buoy clears on arrival.
-    if (this.touch.steerPt) this.buoy = { x: this.touch.steerPt.x, y: this.touch.steerPt.y };
+    // The screen is the helm: while a finger is down, turn toward its current
+    // position. On release there is no retained target, so the current heading
+    // simply carries on.
     let tt: -1 | 0 | 1 = 0;
-    if (this.buoy) {
-      const dx = wrapDelta(this.buoy.x - this.player.x, w);
-      const dy = wrapDelta(this.buoy.y - this.player.y, h);
-      if (!this.touch.steerPt && Math.hypot(dx, dy) < ARRIVE_RADIUS) this.buoy = null;
-      else tt = turnToward(Math.atan2(dy, dx), this.player.heading);
+    if (this.touch.steerPt) {
+      const dx = wrapDelta(this.touch.steerPt.x - this.player.x, w);
+      const dy = wrapDelta(this.touch.steerPt.y - this.player.y, h);
+      tt = turnToward(Math.atan2(dy, dx), this.player.heading);
     }
-    // Guns autofire on touch; the usual reload rules still apply below.
-    const auto =
-      this.isTouchDevice &&
-      !this.over &&
-      autoFireWanted(
-        this.player,
-        this.player.type === 'submarine',
-        [
-          {
-            x: this.enemy.x,
-            y: this.enemy.y,
-            alive: this.enemy.alive,
-            hidden: this.enemy.depth > DIVE.hidden,
-            shielded: false,
-          },
-        ],
-        w,
-        h,
-      );
-    this.input.setVirtual(tt === -1, tt === 1, auto, this.touch.dive);
+    this.input.setVirtual(tt === -1, tt === 1, this.touch.consumeFire(), this.touch.dive);
 
     let turn: Turn = 0;
     if (this.input.isDown('ArrowLeft') || this.input.isDown('KeyA')) turn = -1;
@@ -442,14 +418,7 @@ export class Game {
     this.drawWindIndicator();
 
     if (this.isTouchDevice && !this.over) {
-      if (this.buoy) drawBuoy(ctx, this.buoy.x, this.buoy.y);
-      this.touch.draw(
-        ctx,
-        this.viewW,
-        this.viewH,
-        this.player?.type === 'submarine',
-        this.diveCharge / DIVE.max,
-      );
+      this.touch.draw(ctx, this.viewW, this.viewH, this.player?.type === 'submarine');
     }
   }
 

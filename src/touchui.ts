@@ -1,16 +1,9 @@
-// Mobile controls and combat assists: tap-to-sail steering, a dive toggle for
-// submarines, autofire, and the incoming-shot warning. Used by both practice
-// battles (game.ts) and multiplayer (multiplayer.ts) so the two modes feel
-// identical under thumbs. Desktop keyboard play is untouched by all of it.
+// Mobile controls and combat assists: direct touch steering, tap-to-fire,
+// double-tap diving, and the incoming-shot warning. Used by both practice and
+// multiplayer so the two modes feel identical under thumbs. Desktop keyboard
+// play is untouched by all of it.
 
 import { wrapDelta } from './ship';
-
-export interface BtnRect {
-  x: number;
-  y: number;
-  w: number;
-  h: number;
-}
 
 /** True when the device plausibly has a touchscreen. `maxTouchPoints` alone
  *  reports 0 in some Android WebViews (chat-app in-app browsers, where invite
@@ -22,30 +15,7 @@ export function touchCapable(): boolean {
   return window.matchMedia?.('(any-pointer: coarse)').matches ?? false;
 }
 
-// iOS home-indicator / notch inset in px, exposed by style.css as --safe-bottom
-// (env() is CSS-only). Without it the bottom button row sits in the swipe-up
-// gesture zone. Rotation changes the inset, so re-read on resize.
-let safeBottom = 0;
-function readSafeBottom() {
-  const v = getComputedStyle(document.documentElement).getPropertyValue('--safe-bottom');
-  safeBottom = parseFloat(v) || 0;
-}
-readSafeBottom();
-// The stylesheet defining --safe-bottom may not be applied yet when this
-// module first runs (prod loads CSS via <link>), so read again after load.
-window.addEventListener('load', readSafeBottom);
-window.addEventListener('resize', readSafeBottom);
-
-// Large enough for thumbs.
-export const BTN_SIZE = 72;
-export const BTN_MARGIN = 24;
-
 const TURN_DEADZONE = 0.12; // rad — stop turning when close enough to the course
-
-/** Tap-to-sail: how close (world px) the ship must pass to a set course point
- *  before it counts as reached. Slightly over the widest turning circle
- *  (small ship ≈ 72 px) so a near miss doesn't become an endless orbit. */
-export const ARRIVE_RADIUS = 85;
 
 /** Which way to turn to reach `desired`, re-evaluated per frame against the
  *  current heading so the ship settles on course instead of oscillating. */
@@ -55,32 +25,6 @@ export function turnToward(desired: number, heading: number): -1 | 0 | 1 {
   while (d < -Math.PI) d += Math.PI * 2;
   if (Math.abs(d) < TURN_DEADZONE) return 0;
   return d > 0 ? 1 : -1;
-}
-
-export interface TouchButtons {
-  dive: BtnRect; // only drawn/used when your ship is a submarine
-}
-
-/** Guns autofire on touch, so the only button is the submarine's dive toggle,
- *  under the right thumb. Steering has no fixed rect — taps set the course. */
-export function layoutTouchButtons(w: number, h: number): TouchButtons {
-  const by = h - BTN_MARGIN - BTN_SIZE - safeBottom;
-  return {
-    dive: { x: w - BTN_MARGIN - BTN_SIZE, y: by, w: BTN_SIZE, h: BTN_SIZE },
-  };
-}
-
-// Thumbs are blunt and eyes are on the battle, so touches count a bit beyond
-// the drawn edge.
-const HIT_PADDING = 16;
-
-export function hitBtn(btn: BtnRect, tx: number, ty: number): boolean {
-  return (
-    tx >= btn.x - HIT_PADDING &&
-    tx <= btn.x + btn.w + HIT_PADDING &&
-    ty >= btn.y - HIT_PADDING &&
-    ty <= btn.y + btn.h + HIT_PADDING
-  );
 }
 
 /** Best-effort immersion when a battle starts on a touch device: fullscreen
@@ -106,75 +50,115 @@ export function haptic(pattern: number | number[]) {
   }
 }
 
-export function drawTouchBtn(
-  ctx: CanvasRenderingContext2D,
-  btn: BtnRect,
-  label: string,
-  active: boolean,
-) {
-  ctx.fillStyle = active ? 'rgba(255,255,255,0.45)' : 'rgba(0,0,0,0.35)';
-  ctx.strokeStyle = 'rgba(255,255,255,0.6)';
-  ctx.lineWidth = 2;
-  ctx.beginPath();
-  ctx.roundRect(btn.x, btn.y, btn.w, btn.h, 14);
-  ctx.fill();
-  ctx.stroke();
+const TAP_MAX_MS = 250;
+const DOUBLE_TAP_MAX_MS = 325;
+const TAP_MOVE_MAX = 24;
+const DOUBLE_TAP_DISTANCE = 48;
 
-  ctx.fillStyle = '#fff';
-  ctx.font = 'bold 28px system-ui, sans-serif';
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-  ctx.fillText(label, btn.x + btn.w / 2, btn.y + btn.h / 2);
+interface TrackedTouch {
+  startX: number;
+  startY: number;
+  x: number;
+  y: number;
+  startedAt: number;
 }
 
-/** Tap-to-sail: tap (or hold) anywhere off the buttons and the game sets a
- *  course buoy there — the ship steers itself to it and sails on through.
- *  This class only tracks fingers; the buoy lives in world space and belongs
- *  to the game, which converts `steerPt` through its own camera. Fire is
- *  press-and-hold; dive is a tap toggle so submariners don't hold a finger. */
+/** The first finger on the sea is the helm: while held, its current position
+ *  supplies a desired heading. Other fingers can tap to fire without taking
+ *  over steering. A quick tap by any finger fires; two nearby quick taps
+ *  toggle a submarine's dive state. */
 export class TouchControls {
-  /** Dive toggle state — tap flips it; the game surfaces the sub when the
-   *  charge runs out, but the toggle stays until tapped off. */
+  /** Dive toggle state — double-tap flips it. */
   dive = false;
-  /** Screen position (canvas CSS px) of the steering finger while it is down,
-   *  null once lifted. While non-null the game keeps re-aiming at it. */
+  /** Current steering-finger position in canvas CSS pixels. Once the finger is
+   *  lifted this becomes null, leaving the ship on its present heading. */
   steerPt: { x: number; y: number } | null = null;
-  /** For the idle "tap the sea" hint — true after the first course is set. */
+  /** For the one-time touch controls hint. */
   everSteered = false;
 
   private steerId: number | null = null; // identifier of the steering touch
-  private diveHeld = false; // edge detector for the toggle
+  private tracked = new Map<number, TrackedTouch>();
+  private fireRequested = false;
+  private lastTapAt = -Infinity;
+  private lastTapX = 0;
+  private lastTapY = 0;
 
   /** Feed every canvas touch event. `w`/`h` are canvas CSS-pixel dimensions. */
   update(e: TouchEvent, canvas: HTMLCanvasElement, w: number, h: number, sub: boolean) {
     const rect = canvas.getBoundingClientRect();
     const sx = w / rect.width;
     const sy = h / rect.height;
-    const btns = layoutTouchButtons(w, h);
+    const point = (t: Touch) => ({
+      x: (t.clientX - rect.left) * sx,
+      y: (t.clientY - rect.top) * sy,
+    });
+    const now = performance.now();
 
-    let diveHit = false;
-    let steer: { x: number; y: number } | null = null;
-    let claim: { id: number; x: number; y: number } | null = null;
+    if (e.type === 'touchstart') {
+      for (const t of Array.from(e.changedTouches)) {
+        const p = point(t);
+        this.tracked.set(t.identifier, {
+          startX: p.x,
+          startY: p.y,
+          x: p.x,
+          y: p.y,
+          startedAt: now,
+        });
+        if (this.steerId === null) this.steerId = t.identifier;
+      }
+    }
+
     for (const t of Array.from(e.touches)) {
-      const tx = (t.clientX - rect.left) * sx;
-      const ty = (t.clientY - rect.top) * sy;
-      // The steering finger stays the steering finger even if it wanders over
-      // the button; only new touches are hit-tested against it.
-      if (t.identifier === this.steerId) steer = { x: tx, y: ty };
-      else if (sub && hitBtn(btns.dive, tx, ty)) diveHit = true;
-      else if (claim === null) claim = { id: t.identifier, x: tx, y: ty };
+      const tracked = this.tracked.get(t.identifier);
+      if (tracked) Object.assign(tracked, point(t));
     }
 
-    if (steer === null && claim !== null) {
-      this.steerId = claim.id;
-      steer = { x: claim.x, y: claim.y };
-    }
-    if (steer === null) this.steerId = null;
-    else this.everSteered = true;
-    this.steerPt = steer;
+    if (e.type === 'touchend' || e.type === 'touchcancel') {
+      for (const t of Array.from(e.changedTouches)) {
+        const tracked = this.tracked.get(t.identifier);
+        if (!tracked) continue;
+        Object.assign(tracked, point(t));
 
-    if (diveHit && !this.diveHeld) this.dive = !this.dive;
-    this.diveHeld = diveHit;
+        if (
+          e.type === 'touchend' &&
+          now - tracked.startedAt <= TAP_MAX_MS &&
+          Math.hypot(tracked.x - tracked.startX, tracked.y - tracked.startY) <= TAP_MOVE_MAX
+        ) {
+          this.fireRequested = true;
+          if (
+            sub &&
+            now - this.lastTapAt <= DOUBLE_TAP_MAX_MS &&
+            Math.hypot(tracked.x - this.lastTapX, tracked.y - this.lastTapY) <=
+              DOUBLE_TAP_DISTANCE
+          ) {
+            this.dive = !this.dive;
+            this.lastTapAt = -Infinity; // a third tap starts a new pair
+          } else {
+            this.lastTapAt = now;
+            this.lastTapX = tracked.x;
+            this.lastTapY = tracked.y;
+          }
+        }
+
+        this.tracked.delete(t.identifier);
+        if (this.steerId === t.identifier) this.steerId = null;
+      }
+    }
+
+    // If the helmsman lifts while another finger remains down, that finger
+    // becomes the helm without requiring a fresh touch.
+    if (this.steerId === null) this.steerId = this.tracked.keys().next().value ?? null;
+    const steer = this.steerId === null ? undefined : this.tracked.get(this.steerId);
+    this.steerPt = steer ? { x: steer.x, y: steer.y } : null;
+    if (this.steerPt) this.everSteered = true;
+  }
+
+  /** Consume one or more taps since the previous frame as one trigger press.
+   *  Reload rules still decide whether a shot can actually leave. */
+  consumeFire(): boolean {
+    const fire = this.fireRequested;
+    this.fireRequested = false;
+    return fire;
   }
 
   /** Forget all touch state (battle ended, session left). */
@@ -182,87 +166,30 @@ export class TouchControls {
     this.dive = false;
     this.steerPt = null;
     this.steerId = null;
-    this.diveHeld = false;
+    this.tracked.clear();
+    this.fireRequested = false;
+    this.lastTapAt = -Infinity;
   }
 
-  /** `charge` is the submarine dive charge 0..1, shown as a fill in the dive
-   *  button so the player sees how much air is left without a separate HUD. */
-  draw(ctx: CanvasRenderingContext2D, w: number, h: number, sub: boolean, charge = 1) {
-    const btns = layoutTouchButtons(w, h);
-    if (sub) {
-      drawTouchBtn(ctx, btns.dive, '🤿', this.dive);
-      const d = btns.dive;
-      ctx.save();
-      ctx.beginPath();
-      ctx.roundRect(d.x, d.y, d.w, d.h, 14);
-      ctx.clip();
-      ctx.fillStyle = 'rgba(79, 216, 239, 0.35)';
-      const fh = d.h * Math.max(0, Math.min(1, charge));
-      ctx.fillRect(d.x, d.y + d.h - fh, d.w, fh);
-      ctx.restore();
-    }
-
+  draw(ctx: CanvasRenderingContext2D, w: number, h: number, sub: boolean) {
     if (!this.everSteered) {
-      // One-time hint until the first course is set.
+      // One-time hint until the first touch takes the helm.
       ctx.fillStyle = 'rgba(255,255,255,0.75)';
       ctx.font = '600 14px system-ui, sans-serif';
       ctx.textAlign = 'center';
       ctx.textBaseline = 'bottom';
-      ctx.fillText('👆 tap the sea to set course', w / 2, h - BTN_MARGIN - safeBottom - 6);
+      ctx.fillText(
+        sub ? 'hold to steer · tap to fire · double-tap to dive' : 'hold to steer · tap to fire',
+        w / 2,
+        h - 24,
+      );
     }
   }
 }
 
 // ── Mobile combat assists ────────────────────────────────────────────────────
-// Touch play is hands-full, so on touch devices the local player's inputs get
-// help. These are input/HUD assists only — the simulation is unchanged, and a
-// phone player's shots obey exactly the same reload, range and falloff rules
-// as everyone else's.
-
-const AUTOFIRE_RANGE = 300; // px — under max cannon range so falloff still stings
-const AUTOFIRE_TORPEDO_RANGE = 700; // px — don't waste torpedoes cross-map
 const THREAT_HORIZON = 1.0; // s of shot flight considered for the warning
 const THREAT_RADIUS = 55; // px — how near a passing shot must come to count
-
-function relAngle(a: number): number {
-  while (a > Math.PI) a -= Math.PI * 2;
-  while (a < -Math.PI) a += Math.PI * 2;
-  return a;
-}
-
-export interface AssistTarget {
-  x: number;
-  y: number;
-  alive: boolean;
-  hidden: boolean; // submerged submarine — can't be seen, shouldn't be shot at
-  shielded: boolean; // spawn protection — shots would be wasted
-}
-
-/** Autofire: should the local ship shoot this frame? Broadsides fire when an
- *  enemy sits near either beam inside cannon range; submarines when one is
- *  roughly dead ahead. */
-export function autoFireWanted(
-  me: { x: number; y: number; heading: number },
-  sub: boolean,
-  targets: AssistTarget[],
-  wrapW: number,
-  wrapH: number,
-): boolean {
-  for (const t of targets) {
-    if (!t.alive || t.hidden || t.shielded) continue;
-    const dx = wrapDelta(t.x - me.x, wrapW);
-    const dy = wrapDelta(t.y - me.y, wrapH);
-    const dist = Math.hypot(dx, dy);
-    const bearing = relAngle(Math.atan2(dy, dx) - me.heading);
-    if (sub) {
-      if (dist < AUTOFIRE_TORPEDO_RANGE && Math.abs(bearing) < 0.28) return true;
-    } else if (dist < AUTOFIRE_RANGE && Math.abs(Math.sin(bearing)) > 0.5) {
-      // |sin| > 0.5 ⇔ within ±60° of one of the beams, where the guns point.
-      return true;
-    }
-  }
-  return false;
-}
 
 /** Bearings (world rad, from the ship) of shots that will pass within
  *  THREAT_RADIUS of it inside THREAT_HORIZON seconds. Your own shots exclude
@@ -303,23 +230,5 @@ export function drawThreatArc(
   ctx.lineWidth = 4;
   ctx.beginPath();
   ctx.arc(x, y, r, bearing - 0.55, bearing + 0.55);
-  ctx.stroke();
-}
-
-/** The course buoy: a gold marker with a pulsing ring, drawn by the game in
- *  screen space wherever the current tap-to-sail target sits. */
-export function drawBuoy(ctx: CanvasRenderingContext2D, x: number, y: number) {
-  const pulse = 10 + 3 * Math.sin(performance.now() / 180);
-  ctx.strokeStyle = 'rgba(255, 210, 63, 0.55)';
-  ctx.lineWidth = 2;
-  ctx.beginPath();
-  ctx.arc(x, y, pulse, 0, Math.PI * 2);
-  ctx.stroke();
-  ctx.fillStyle = '#ffd23f';
-  ctx.strokeStyle = '#fff';
-  ctx.lineWidth = 1.5;
-  ctx.beginPath();
-  ctx.arc(x, y, 6, 0, Math.PI * 2);
-  ctx.fill();
   ctx.stroke();
 }

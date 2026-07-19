@@ -16,7 +16,7 @@ export class Input {
     window.addEventListener('blur', () => this.down.clear());
   }
 
-  /** Set on-screen touch button state (called by the canvas touch handlers). */
+  /** Set virtual touch-control state. */
   setVirtual(left: boolean, right: boolean, fire: boolean, dive = false) {
     this.virtual.left = left;
     this.virtual.right = right;

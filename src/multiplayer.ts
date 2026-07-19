@@ -36,7 +36,7 @@ import {
 } from './net';
 import { DIVE, gunOffsets, muzzleReach, RAM, SAIL_TYPES, Ship, SHIP_TYPES, wrapDelta, YOU_COLOR, type ShipTypeName, type Turn } from './ship';
 import type { GameSounds } from './sounds';
-import { ARRIVE_RADIUS, autoFireWanted, drawBuoy, drawThreatArc, haptic, incomingThreats, TouchControls, touchCapable, turnToward } from './touchui';
+import { drawThreatArc, haptic, incomingThreats, TouchControls, touchCapable, turnToward } from './touchui';
 import { Wind } from './wind';
 import type { DataConnection } from 'peerjs';
 
@@ -388,8 +388,6 @@ export class MpSession {
   // real touch event anywhere upgrades this at runtime.
   private isTouchDevice = touchCapable();
   private touch = new TouchControls();
-  /** Tap-to-sail course marker in world coordinates. */
-  private buoy: { x: number; y: number } | null = null;
   private prevMyKills = 0; // last frame's own kill count, for the kill fanfare
   private prevMeAlive = true; // last frame's own alive flag, for the sunk cue
 
@@ -430,13 +428,12 @@ export class MpSession {
     this.isTouchDevice = true;
   };
 
-  /** One-thumb steering + fire + dive toggle — multiplayer battles use the
-   *  same TouchControls as practice mode so both feel identical under thumbs. */
+  /** Direct steering + tap gestures — multiplayer battles use the same
+   *  TouchControls as practice mode so both feel identical under thumbs. */
   private onTouch = (e: TouchEvent) => {
     this.isTouchDevice = true;
     if (this.phase !== 'battle') {
       this.touch.reset();
-      this.buoy = null;
       this.input.setVirtual(false, false, false, false);
       return;
     }
@@ -444,41 +441,23 @@ export class MpSession {
     this.touch.update(e, this.ctx.canvas, this.viewW, this.viewH, sub);
   };
 
-  /** Tap-to-sail: the steering finger maps through the active camera to a
-   *  world buoy; the ship steers toward it each frame, sails through, and the
-   *  buoy clears on arrival (ships never stop). Chased live while held. */
+  /** Map the steering finger through the active camera and turn toward its
+   *  current world position. Releasing it leaves the current heading alone. */
   private steerFromTouch(me: Ship, toWorld: (sx: number, sy: number) => { x: number; y: number }) {
+    let tt: -1 | 0 | 1 = 0;
     if (this.touch.steerPt) {
       const p = toWorld(this.touch.steerPt.x, this.touch.steerPt.y);
-      this.buoy = {
-        x: ((p.x % WORLD_W) + WORLD_W) % WORLD_W,
-        y: ((p.y % WORLD_H) + WORLD_H) % WORLD_H,
-      };
-    }
-    let tt: -1 | 0 | 1 = 0;
-    if (this.buoy) {
-      const dx = wrapDelta(this.buoy.x - me.x, WORLD_W);
-      const dy = wrapDelta(this.buoy.y - me.y, WORLD_H);
-      if (!this.touch.steerPt && Math.hypot(dx, dy) < ARRIVE_RADIUS) this.buoy = null;
-      else tt = turnToward(Math.atan2(dy, dx), me.heading);
+      const dx = wrapDelta(p.x - me.x, WORLD_W);
+      const dy = wrapDelta(p.y - me.y, WORLD_H);
+      tt = turnToward(Math.atan2(dy, dx), me.heading);
     }
     const sub = me.type === 'submarine';
-    // Guns autofire on touch — the host applies the same reload/range rules
-    // as for keyboard players, this only supplies the input.
-    const auto = autoFireWanted(
-      me,
-      sub,
-      this.ships.map((s, i) => ({
-        x: s.x,
-        y: s.y,
-        alive: i !== this.you && s.alive,
-        hidden: s.depth > DIVE.hidden,
-        shielded: this.buffView[i]?.inv ?? false,
-      })),
-      WORLD_W,
-      WORLD_H,
+    this.input.setVirtual(
+      tt === -1,
+      tt === 1,
+      this.touch.consumeFire(),
+      this.touch.dive && sub,
     );
-    this.input.setVirtual(tt === -1, tt === 1, auto, this.touch.dive && sub);
   }
 
   // ── Session entry points ────────────────────────────────────────────────────
@@ -649,7 +628,6 @@ export class MpSession {
     c.removeEventListener('touchcancel', this.onTouch);
     window.removeEventListener('touchstart', this.sawTouch);
     this.touch.reset();
-    this.buoy = null;
     this.input.setVirtual(false, false, false, false);
   }
 
@@ -843,7 +821,6 @@ export class MpSession {
   // ── Host: battle ────────────────────────────────────────────────────────────
 
   private beginRound() {
-    this.buoy = null;
     this.touch.reset();
     this.prevMyKills = 0;
     this.prevMeAlive = true;
@@ -1607,7 +1584,6 @@ export class MpSession {
         break;
 
       case 'start':
-        this.buoy = null;
         this.touch.reset();
         this.prevMyKills = 0;
         this.prevMeAlive = true;
@@ -1910,11 +1886,6 @@ export class MpSession {
       }
       ctx.restore();
       this.drawEdgeIndicators(cx, cy, vw, vh, scale, cw, ch);
-      if (this.isTouchDevice && this.buoy) {
-        const bx = cw / 2 + wrapDelta(this.buoy.x - cx, WORLD_W) * scale;
-        const by = ch / 2 + wrapDelta(this.buoy.y - cy, WORLD_H) * scale;
-        drawBuoy(ctx, bx, by);
-      }
     } else {
       // Letterbox: the whole arena scaled to fit, as always on big screens.
       const ox = (cw - WORLD_W * fit) / 2;
@@ -1935,16 +1906,13 @@ export class MpSession {
       ctx.lineWidth = 2;
       ctx.strokeRect(ox, oy, WORLD_W * fit, WORLD_H * fit);
 
-      // Touch on a big screen (tablet letterbox): same tap-to-sail, with taps
-      // in the letterbox bars clamped onto the world edge.
+      // Touch on a big screen (tablet letterbox): map the steering finger into
+      // the arena, clamping touches in the letterbox bars to the world edge.
       if (this.isTouchDevice && this.phase === 'battle' && me) {
         this.steerFromTouch(me, (sx, sy) => ({
           x: Math.min(WORLD_W - 1, Math.max(0, (sx - ox) / fit)),
           y: Math.min(WORLD_H - 1, Math.max(0, (sy - oy) / fit)),
         }));
-      }
-      if (this.isTouchDevice && this.buoy) {
-        drawBuoy(ctx, ox + this.buoy.x * fit, oy + this.buoy.y * fit);
       }
     }
 
@@ -2064,10 +2032,7 @@ export class MpSession {
   /** On-screen touch controls during multiplayer battles. */
   private drawTouchControls() {
     const sub = this.ships[this.you]?.type === 'submarine';
-    const charge = this.isHost
-      ? (this.diveCharge[this.you] ?? 0) / DIVE_MAX
-      : (this.guestCharge[this.you] ?? 0);
-    this.touch.draw(this.ctx, this.viewW, this.viewH, sub, charge);
+    this.touch.draw(this.ctx, this.viewW, this.viewH, sub);
   }
 
   /** The maelstrom: a swirling danger wash outside the calm circular eye. */
