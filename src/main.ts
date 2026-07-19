@@ -3,6 +3,7 @@ import { Input } from './input';
 import { MpSession, MAX_PLAYERS, crewColor, type LeaderboardEntry } from './multiplayer';
 import { CODE_LENGTH, type LobbyPlayerInfo, type MpMode } from './net';
 import { SAIL_TYPES, SHIP_TYPES, type ShipTypeName } from './ship';
+import { createSounds } from './sounds';
 import { haptic, requestGameFullscreen, touchCapable } from './touchui';
 import './style.css';
 
@@ -15,31 +16,8 @@ try {
   /* localStorage may be unavailable (e.g. private mode) */
 }
 
-// Preload a sound and return a function that plays a fresh clone each call
-// (cloning lets multiple instances overlap, e.g. several explosions at once).
-// The source clips are loud, so each is played well below full volume; `rate`
-// re-pitches a clip so one file can serve two distinct cues (preservesPitch off
-// makes the rate change the pitch, not just the tempo).
-function makeSound(url: string, volume: number, rate = 1): () => void {
-  const audio = new Audio(url);
-  audio.preload = 'auto';
-  return () => {
-    if (muted) return;
-    const clone = audio.cloneNode() as HTMLAudioElement;
-    clone.volume = volume;
-    if (rate !== 1) {
-      (clone as HTMLAudioElement & { preservesPitch?: boolean }).preservesPitch = false;
-      clone.playbackRate = rate;
-    }
-    clone.play().catch(() => {});
-  };
-}
-
-// Three player-centric cues. Firing happens most often, so it's the quietest;
-// taking a hit is the loudest and lowest-pitched so it clearly reads as danger.
-const playFire = makeSound('./cannon.mp3', 0.2);
-const playMyHit = makeSound('./explosion.mp3', 0.28, 1.18);
-const playGetHit = makeSound('./explosion.mp3', 0.42, 0.78);
+// All cues are synthesized (see sounds.ts) — the old mp3 clips are gone.
+const sounds = createSounds(() => muted);
 
 // ── Canvas setup ──────────────────────────────────────────────────────────────
 
@@ -61,13 +39,13 @@ function resize() {
 
 const input = new Input();
 const game = new Game(ctx, input);
-game.onCannonFire = playFire;
+game.onCannonFire = sounds.fire;
 game.onHit = (youWereHit: boolean) => {
   if (youWereHit) {
-    playGetHit();
+    sounds.getHit();
     haptic([30, 40, 30]);
   } else {
-    playMyHit();
+    sounds.myHit();
   }
 };
 game.start();
@@ -270,6 +248,7 @@ document.getElementById('set-sail')!.addEventListener('click', setSail);
 // ── Game-over handling ────────────────────────────────────────────────────────
 
 game.onGameOver = (won: boolean) => {
+  sounds.sunk(); // someone went down either way — yours or theirs
   if (selectedPractice === 'survivor') {
     if (won) {
       // Enemy sunk — spawn the next wave without showing the game-over overlay.
@@ -601,11 +580,7 @@ mpCreateBtn.addEventListener('click', () => {
   mpStatus.textContent = 'Opening room…';
   mpCreateBtn.disabled = true;
   mpJoinBtn.disabled = true;
-  mp = MpSession.host(mpNameInput.value, ctx, input, mpCallbacks(), {
-    fire: playFire,
-    myHit: playMyHit,
-    getHit: playGetHit,
-  });
+  mp = MpSession.host(mpNameInput.value, ctx, input, mpCallbacks(), sounds);
 });
 
 mpJoinBtn.addEventListener('click', () => {
@@ -619,11 +594,7 @@ mpJoinBtn.addEventListener('click', () => {
   mpStatus.textContent = 'Joining…';
   mpCreateBtn.disabled = true;
   mpJoinBtn.disabled = true;
-  mp = MpSession.join(code, mpNameInput.value, ctx, input, mpCallbacks(), {
-    fire: playFire,
-    myHit: playMyHit,
-    getHit: playGetHit,
-  });
+  mp = MpSession.join(code, mpNameInput.value, ctx, input, mpCallbacks(), sounds);
 });
 
 mpCodeInput.addEventListener('keydown', (e) => {

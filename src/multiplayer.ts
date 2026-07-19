@@ -35,6 +35,7 @@ import {
   type ShipState,
 } from './net';
 import { DIVE, gunOffsets, muzzleReach, RAM, SAIL_TYPES, Ship, SHIP_TYPES, wrapDelta, YOU_COLOR, type ShipTypeName, type Turn } from './ship';
+import type { GameSounds } from './sounds';
 import { ARRIVE_RADIUS, drawBuoy, haptic, TouchControls, touchCapable, turnToward } from './touchui';
 import { Wind } from './wind';
 import type { DataConnection } from 'peerjs';
@@ -326,11 +327,7 @@ export interface MpCallbacks {
   onError(message: string): void;
 }
 
-interface Sounds {
-  fire: () => void; // you fired
-  myHit: () => void; // your shot/ram landed on someone
-  getHit: () => void; // you took a hit
-}
+type Sounds = GameSounds;
 
 export class MpSession {
   readonly isHost: boolean;
@@ -393,6 +390,7 @@ export class MpSession {
   private touch = new TouchControls();
   /** Tap-to-sail course marker in world coordinates. */
   private buoy: { x: number; y: number } | null = null;
+  private prevAlive: boolean[] = []; // last frame's alive flags, for the sunk cue
 
   private constructor(
     isHost: boolean,
@@ -831,6 +829,7 @@ export class MpSession {
   private beginRound() {
     this.buoy = null;
     this.touch.reset();
+    this.prevAlive = [];
     this.spawns = this.players.map((p, i) => {
       const s = SPAWNS[i];
       return {
@@ -1435,7 +1434,7 @@ export class MpSession {
         if (!ship.alive || ship.depth > 0.3) continue; // must surface to grab bounties
         if (Math.hypot(ship.x - p.x, ship.y - p.y) < PICKUP_R + ship.width * 0.7) {
           this.applyPickup(i, p.type);
-          this.pendingEvents.push({ e: 'grab', x: p.x, y: p.y, p: p.type });
+          this.pendingEvents.push({ e: 'grab', x: p.x, y: p.y, p: p.type, by: i });
           p.ttl = 0;
           break;
         }
@@ -1593,6 +1592,7 @@ export class MpSession {
       case 'start':
         this.buoy = null;
         this.touch.reset();
+        this.prevAlive = [];
         this.islands = msg.islands;
         this.spawns = msg.ships;
         this.you = msg.you;
@@ -1793,13 +1793,24 @@ export class MpSession {
           this.sounds.getHit();
           haptic([30, 40, 30]);
         } else if (ev.by === this.you) this.sounds.myHit();
+      } else if (ev.e === 'grab') {
+        this.splashes.push(new Splash(ev.x, ev.y));
+        if (ev.by === this.you) this.sounds.pickup();
       } else {
         this.splashes.push(new Splash(ev.x, ev.y));
+        if (ev.e === 'splash') this.sounds.splash(); // quiet + rate-limited inside
       }
     }
   }
 
   private tickEffects(dt: number) {
+    // A ship slipping under is a big moment — everyone hears it. Runs on host
+    // and guests alike (guests see health flip in snapshots).
+    for (let i = 0; i < this.ships.length; i++) {
+      const alive = this.ships[i].alive;
+      if ((this.prevAlive[i] ?? true) && !alive) this.sounds.sunk();
+      this.prevAlive[i] = alive;
+    }
     for (const ex of this.explosions) ex.update(dt);
     this.explosions = this.explosions.filter((ex) => !ex.done);
     for (const sp of this.splashes) sp.update(dt);
