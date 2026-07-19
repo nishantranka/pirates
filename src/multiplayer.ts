@@ -35,7 +35,7 @@ import {
   type ShipState,
 } from './net';
 import { DIVE, gunOffsets, muzzleReach, RAM, SAIL_TYPES, Ship, SHIP_TYPES, wrapDelta, YOU_COLOR, type ShipTypeName, type Turn } from './ship';
-import { haptic, TouchControls, touchCapable } from './touchui';
+import { ARRIVE_RADIUS, drawBuoy, haptic, TouchControls, touchCapable, turnToward } from './touchui';
 import { Wind } from './wind';
 import type { DataConnection } from 'peerjs';
 
@@ -388,6 +388,8 @@ export class MpSession {
   // real touch event anywhere upgrades this at runtime.
   private isTouchDevice = touchCapable();
   private touch = new TouchControls();
+  /** Tap-to-sail course marker in world coordinates. */
+  private buoy: { x: number; y: number } | null = null;
 
   private constructor(
     isHost: boolean,
@@ -432,11 +434,35 @@ export class MpSession {
     this.isTouchDevice = true;
     if (this.phase !== 'battle') {
       this.touch.reset();
+      this.buoy = null;
+      this.input.setVirtual(false, false, false, false);
       return;
     }
     const sub = this.ships[this.you]?.type === 'submarine';
     this.touch.update(e, this.ctx.canvas, this.viewW, this.viewH, sub);
   };
+
+  /** Tap-to-sail: the steering finger maps through the active camera to a
+   *  world buoy; the ship steers toward it each frame, sails through, and the
+   *  buoy clears on arrival (ships never stop). Chased live while held. */
+  private steerFromTouch(me: Ship, toWorld: (sx: number, sy: number) => { x: number; y: number }) {
+    if (this.touch.steerPt) {
+      const p = toWorld(this.touch.steerPt.x, this.touch.steerPt.y);
+      this.buoy = {
+        x: ((p.x % WORLD_W) + WORLD_W) % WORLD_W,
+        y: ((p.y % WORLD_H) + WORLD_H) % WORLD_H,
+      };
+    }
+    let tt: -1 | 0 | 1 = 0;
+    if (this.buoy) {
+      const dx = wrapDelta(this.buoy.x - me.x, WORLD_W);
+      const dy = wrapDelta(this.buoy.y - me.y, WORLD_H);
+      if (!this.touch.steerPt && Math.hypot(dx, dy) < ARRIVE_RADIUS) this.buoy = null;
+      else tt = turnToward(Math.atan2(dy, dx), me.heading);
+    }
+    const sub = me.type === 'submarine';
+    this.input.setVirtual(tt === -1, tt === 1, this.touch.fire, this.touch.dive && sub);
+  }
 
   // ── Session entry points ────────────────────────────────────────────────────
 
@@ -606,6 +632,7 @@ export class MpSession {
     c.removeEventListener('touchcancel', this.onTouch);
     window.removeEventListener('touchstart', this.sawTouch);
     this.touch.reset();
+    this.buoy = null;
     this.input.setVirtual(false, false, false, false);
   }
 
@@ -799,6 +826,8 @@ export class MpSession {
   // ── Host: battle ────────────────────────────────────────────────────────────
 
   private beginRound() {
+    this.buoy = null;
+    this.touch.reset();
     this.spawns = this.players.map((p, i) => {
       const s = SPAWNS[i];
       return {
@@ -1522,6 +1551,8 @@ export class MpSession {
         break;
 
       case 'start':
+        this.buoy = null;
+        this.touch.reset();
         this.islands = msg.islands;
         this.spawns = msg.ships;
         this.you = msg.you;
@@ -1712,6 +1743,10 @@ export class MpSession {
         }
       } else if (ev.e === 'hit') {
         this.explosions.push(new Explosion(ev.x, ev.y)); // every hit still flashes
+        // Gold burst under the struck hull (host sets it in takeHit; guests
+        // learn about hits only through these events).
+        const struck = this.ships[ev.on];
+        if (struck) struck.hitFlashAt = performance.now();
         // ...but only hits you're part of make a sound: taking one reads as a
         // heavier "get hit", landing one as a lighter "my hit".
         if (ev.on === this.you) {
@@ -1769,14 +1804,6 @@ export class MpSession {
 
     const me = this.ships[this.you];
 
-    // Touch steering resolves against the current heading every frame so the
-    // ship settles on the dragged direction instead of orbiting it.
-    if (this.isTouchDevice && this.phase === 'battle') {
-      const tt = me ? this.touch.turn(me.heading) : 0;
-      const sub = me?.type === 'submarine';
-      this.input.setVirtual(tt === -1, tt === 1, this.touch.fire, this.touch.dive && sub);
-    }
-
     if (fit < FOLLOW_BELOW && me) {
       // The whole view is open sea — painting it once here (not per tile)
       // avoids a hairline seam where wrapped tiles meet.
@@ -1793,6 +1820,9 @@ export class MpSession {
       const cy = me.y + Math.sin(me.heading) * CAM_LOOKAHEAD;
       const camX = (((cx - vw / 2) % WORLD_W) + WORLD_W) % WORLD_W;
       const camY = (((cy - vh / 2) % WORLD_H) + WORLD_H) % WORLD_H;
+      if (this.isTouchDevice && this.phase === 'battle') {
+        this.steerFromTouch(me, (sx, sy) => ({ x: camX + sx / scale, y: camY + sy / scale }));
+      }
       ctx.save();
       ctx.scale(scale, scale);
       ctx.translate(-camX, -camY);
@@ -1808,6 +1838,11 @@ export class MpSession {
       }
       ctx.restore();
       this.drawEdgeIndicators(cx, cy, vw, vh, scale, cw, ch);
+      if (this.isTouchDevice && this.buoy) {
+        const bx = cw / 2 + wrapDelta(this.buoy.x - cx, WORLD_W) * scale;
+        const by = ch / 2 + wrapDelta(this.buoy.y - cy, WORLD_H) * scale;
+        drawBuoy(ctx, bx, by);
+      }
     } else {
       // Letterbox: the whole arena scaled to fit, as always on big screens.
       const ox = (cw - WORLD_W * fit) / 2;
@@ -1827,6 +1862,18 @@ export class MpSession {
       ctx.strokeStyle = 'rgba(255, 255, 255, 0.25)';
       ctx.lineWidth = 2;
       ctx.strokeRect(ox, oy, WORLD_W * fit, WORLD_H * fit);
+
+      // Touch on a big screen (tablet letterbox): same tap-to-sail, with taps
+      // in the letterbox bars clamped onto the world edge.
+      if (this.isTouchDevice && this.phase === 'battle' && me) {
+        this.steerFromTouch(me, (sx, sy) => ({
+          x: Math.min(WORLD_W - 1, Math.max(0, (sx - ox) / fit)),
+          y: Math.min(WORLD_H - 1, Math.max(0, (sy - oy) / fit)),
+        }));
+      }
+      if (this.isTouchDevice && this.buoy) {
+        drawBuoy(ctx, ox + this.buoy.x * fit, oy + this.buoy.y * fit);
+      }
     }
 
     this.drawHud();

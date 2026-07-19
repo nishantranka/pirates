@@ -37,9 +37,22 @@ window.addEventListener('resize', readSafeBottom);
 export const BTN_SIZE = 72;
 export const BTN_MARGIN = 24;
 
-const JOY_RADIUS = 56; // stick base radius
-const JOY_DEADZONE = 10; // px of drag before steering kicks in
-const TURN_DEADZONE = 0.15; // rad — stop turning when close enough to the drag heading
+const TURN_DEADZONE = 0.12; // rad — stop turning when close enough to the course
+
+/** Tap-to-sail: how close (world px) the ship must pass to a set course point
+ *  before it counts as reached. Slightly over the widest turning circle
+ *  (small ship ≈ 72 px) so a near miss doesn't become an endless orbit. */
+export const ARRIVE_RADIUS = 85;
+
+/** Which way to turn to reach `desired`, re-evaluated per frame against the
+ *  current heading so the ship settles on course instead of oscillating. */
+export function turnToward(desired: number, heading: number): -1 | 0 | 1 {
+  let d = desired - heading;
+  while (d > Math.PI) d -= Math.PI * 2;
+  while (d < -Math.PI) d += Math.PI * 2;
+  if (Math.abs(d) < TURN_DEADZONE) return 0;
+  return d > 0 ? 1 : -1;
+}
 
 export interface TouchButtons {
   fire: BtnRect;
@@ -113,23 +126,24 @@ export function drawTouchBtn(
   ctx.fillText(label, btn.x + btn.w / 2, btn.y + btn.h / 2);
 }
 
-/** One-thumb steering: drag anywhere (off the buttons) and the ship turns
- *  toward the drag direction. Fire is press-and-hold; dive is a tap toggle so
- *  submariners don't need a third finger held down. */
+/** Tap-to-sail: tap (or hold) anywhere off the buttons and the game sets a
+ *  course buoy there — the ship steers itself to it and sails on through.
+ *  This class only tracks fingers; the buoy lives in world space and belongs
+ *  to the game, which converts `steerPt` through its own camera. Fire is
+ *  press-and-hold; dive is a tap toggle so submariners don't hold a finger. */
 export class TouchControls {
   /** True while a finger is on the fire button. */
   fire = false;
   /** Dive toggle state — tap flips it; the game surfaces the sub when the
    *  charge runs out, but the toggle stays until tapped off. */
   dive = false;
-  /** Desired world heading (rad) while steering, or null when the thumb is up. */
-  desired: number | null = null;
+  /** Screen position (canvas CSS px) of the steering finger while it is down,
+   *  null once lifted. While non-null the game keeps re-aiming at it. */
+  steerPt: { x: number; y: number } | null = null;
+  /** For the idle "tap the sea" hint — true after the first course is set. */
+  everSteered = false;
 
-  private joyId: number | null = null; // identifier of the steering touch
-  private ox = 0; // stick anchor
-  private oy = 0;
-  private kx = 0; // knob position (clamped to the base), for drawing
-  private ky = 0;
+  private steerId: number | null = null; // identifier of the steering touch
   private diveHeld = false; // edge detector for the toggle
 
   /** Feed every canvas touch event. `w`/`h` are canvas CSS-pixel dimensions. */
@@ -141,62 +155,38 @@ export class TouchControls {
 
     let fire = false;
     let diveHit = false;
-    let joy: { x: number; y: number } | null = null;
+    let steer: { x: number; y: number } | null = null;
     let claim: { id: number; x: number; y: number } | null = null;
     for (const t of Array.from(e.touches)) {
       const tx = (t.clientX - rect.left) * sx;
       const ty = (t.clientY - rect.top) * sy;
       // The steering finger stays the steering finger even if it wanders over
       // a button; only new touches are hit-tested against the buttons.
-      if (t.identifier === this.joyId) joy = { x: tx, y: ty };
+      if (t.identifier === this.steerId) steer = { x: tx, y: ty };
       else if (hitBtn(btns.fire, tx, ty)) fire = true;
       else if (sub && hitBtn(btns.dive, tx, ty)) diveHit = true;
       else if (claim === null) claim = { id: t.identifier, x: tx, y: ty };
     }
 
-    if (joy === null && claim !== null) {
-      // New steering finger: the stick anchors wherever it landed.
-      this.joyId = claim.id;
-      this.ox = claim.x;
-      this.oy = claim.y;
-      joy = { x: claim.x, y: claim.y };
+    if (steer === null && claim !== null) {
+      this.steerId = claim.id;
+      steer = { x: claim.x, y: claim.y };
     }
-    if (joy === null) {
-      this.joyId = null;
-      this.desired = null;
-    } else {
-      const dx = joy.x - this.ox;
-      const dy = joy.y - this.oy;
-      const len = Math.hypot(dx, dy);
-      if (len > JOY_DEADZONE) this.desired = Math.atan2(dy, dx);
-      const ang = Math.atan2(dy, dx);
-      const clamped = Math.min(len, JOY_RADIUS);
-      this.kx = this.ox + Math.cos(ang) * clamped;
-      this.ky = this.oy + Math.sin(ang) * clamped;
-    }
+    if (steer === null) this.steerId = null;
+    else this.everSteered = true;
+    this.steerPt = steer;
 
     this.fire = fire;
     if (diveHit && !this.diveHeld) this.dive = !this.dive;
     this.diveHeld = diveHit;
   }
 
-  /** Per-frame: which way to turn to reach the drag heading. Re-evaluated
-   *  against the ship's current heading so it settles instead of orbiting. */
-  turn(heading: number): -1 | 0 | 1 {
-    if (this.desired === null) return 0;
-    let d = this.desired - heading;
-    while (d > Math.PI) d -= Math.PI * 2;
-    while (d < -Math.PI) d += Math.PI * 2;
-    if (Math.abs(d) < TURN_DEADZONE) return 0;
-    return d > 0 ? 1 : -1;
-  }
-
   /** Forget all touch state (battle ended, session left). */
   reset() {
     this.fire = false;
     this.dive = false;
-    this.desired = null;
-    this.joyId = null;
+    this.steerPt = null;
+    this.steerId = null;
     this.diveHeld = false;
   }
 
@@ -218,33 +208,31 @@ export class TouchControls {
       ctx.restore();
     }
 
-    if (this.joyId !== null) {
-      // Active stick: base ring at the anchor, knob toward the drag.
-      ctx.strokeStyle = 'rgba(255,255,255,0.5)';
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.arc(this.ox, this.oy, JOY_RADIUS, 0, Math.PI * 2);
-      ctx.stroke();
-      ctx.fillStyle = 'rgba(255,255,255,0.45)';
-      ctx.beginPath();
-      ctx.arc(this.kx, this.ky, 26, 0, Math.PI * 2);
-      ctx.fill();
-    } else {
-      // Idle hint where the left thumb naturally rests.
-      const cx = BTN_MARGIN + JOY_RADIUS;
-      const cy = h - BTN_MARGIN - JOY_RADIUS - safeBottom;
-      ctx.strokeStyle = 'rgba(255,255,255,0.35)';
-      ctx.lineWidth = 2;
-      ctx.setLineDash([6, 8]);
-      ctx.beginPath();
-      ctx.arc(cx, cy, JOY_RADIUS, 0, Math.PI * 2);
-      ctx.stroke();
-      ctx.setLineDash([]);
-      ctx.fillStyle = 'rgba(255,255,255,0.8)';
-      ctx.font = 'bold 28px system-ui, sans-serif';
+    if (!this.everSteered) {
+      // One-time hint until the first course is set.
+      ctx.fillStyle = 'rgba(255,255,255,0.75)';
+      ctx.font = '600 14px system-ui, sans-serif';
       ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillText('☸', cx, cy);
+      ctx.textBaseline = 'bottom';
+      ctx.fillText('👆 tap the sea to set course', w / 2, h - BTN_MARGIN - safeBottom - 6);
     }
   }
+}
+
+/** The course buoy: a gold marker with a pulsing ring, drawn by the game in
+ *  screen space wherever the current tap-to-sail target sits. */
+export function drawBuoy(ctx: CanvasRenderingContext2D, x: number, y: number) {
+  const pulse = 10 + 3 * Math.sin(performance.now() / 180);
+  ctx.strokeStyle = 'rgba(255, 210, 63, 0.55)';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.arc(x, y, pulse, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.fillStyle = '#ffd23f';
+  ctx.strokeStyle = '#fff';
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.arc(x, y, 6, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.stroke();
 }
