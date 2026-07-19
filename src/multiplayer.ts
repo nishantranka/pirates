@@ -390,7 +390,8 @@ export class MpSession {
   private touch = new TouchControls();
   /** Tap-to-sail course marker in world coordinates. */
   private buoy: { x: number; y: number } | null = null;
-  private prevAlive: boolean[] = []; // last frame's alive flags, for the sunk cue
+  private prevMyKills = 0; // last frame's own kill count, for the kill fanfare
+  private prevMeAlive = true; // last frame's own alive flag, for the sunk cue
 
   private constructor(
     isHost: boolean,
@@ -829,7 +830,8 @@ export class MpSession {
   private beginRound() {
     this.buoy = null;
     this.touch.reset();
-    this.prevAlive = [];
+    this.prevMyKills = 0;
+    this.prevMeAlive = true;
     this.spawns = this.players.map((p, i) => {
       const s = SPAWNS[i];
       return {
@@ -1592,7 +1594,8 @@ export class MpSession {
       case 'start':
         this.buoy = null;
         this.touch.reset();
-        this.prevAlive = [];
+        this.prevMyKills = 0;
+        this.prevMeAlive = true;
         this.islands = msg.islands;
         this.spawns = msg.ships;
         this.you = msg.you;
@@ -1797,20 +1800,23 @@ export class MpSession {
         this.splashes.push(new Splash(ev.x, ev.y));
         if (ev.by === this.you) this.sounds.pickup();
       } else {
+        // Splashes and shield blocks stay visual-only — with a crowd at sea,
+        // other captains' misses are noise, not information.
         this.splashes.push(new Splash(ev.x, ev.y));
-        if (ev.e === 'splash') this.sounds.splash(); // quiet + rate-limited inside
       }
     }
   }
 
   private tickEffects(dt: number) {
-    // A ship slipping under is a big moment — everyone hears it. Runs on host
-    // and guests alike (guests see health flip in snapshots).
-    for (let i = 0; i < this.ships.length; i++) {
-      const alive = this.ships[i].alive;
-      if ((this.prevAlive[i] ?? true) && !alive) this.sounds.sunk();
-      this.prevAlive[i] = alive;
-    }
+    // First-person audio only: your kill count rising is your kill fanfare
+    // (scoreView is authoritative on host and mirrored to guests via
+    // snapshots), and the only sinking you hear is your own.
+    const myKills = this.scoreView[this.you]?.kills ?? 0;
+    if (myKills > this.prevMyKills) this.sounds.kill();
+    this.prevMyKills = myKills;
+    const meAlive = this.ships[this.you]?.alive ?? true;
+    if (this.prevMeAlive && !meAlive) this.sounds.sunk();
+    this.prevMeAlive = meAlive;
     for (const ex of this.explosions) ex.update(dt);
     this.explosions = this.explosions.filter((ex) => !ex.done);
     for (const sp of this.splashes) sp.update(dt);
