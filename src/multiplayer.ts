@@ -89,6 +89,9 @@ const MATCH_DURATION = 90; // s of play in a Leaderboard match (1:30)
 const DEATH_PAUSE = 2; // s a sunk ship stays down before it respawns
 const RESPAWN_FREEZE = 1.2; // s a respawned ship holds still before it can move/fire
 const RESPAWN_BAND = 0.25; // respawn within the central 50% of the map (0.25–0.75 each axis)
+// Open water required around a respawn point — roughly a second of sailing at
+// small-ship speed, so nobody rematerializes about to beach themselves.
+const RESPAWN_CLEAR = 110;
 // The storm holds off until the final stretch, then ramps to full by time-up —
 // and respawns stop the moment it sets in, so the last 20 s are sudden death.
 const STORM_WINDOW = 20; // s of maelstrom finale at the end of a Leaderboard match
@@ -770,7 +773,7 @@ export class MpSession {
       color: crewColor(i, this.players),
       x: spot.x,
       y: spot.y,
-      heading: Math.random() * Math.PI * 2,
+      heading: this.pickClearHeading(spot.x, spot.y),
     };
     this.spawns.push(spawn);
     this.ships.push(new Ship(spawn.x, spawn.y, spawn.heading, spawn.color, spawn.type));
@@ -1085,7 +1088,11 @@ export class MpSession {
     if (this.phase === 'battle') {
       let matchOver: boolean;
       if (this.mode === 'score') {
-        matchOver = this.clock >= MATCH_DURATION;
+        // Timed match — but once the storm's sudden death has set in (no more
+        // respawns), a lone survivor ends it early rather than making everyone
+        // watch the rest of the countdown.
+        const alive = this.ships.filter((s) => s.alive).length;
+        matchOver = this.clock >= MATCH_DURATION || (this.stormActive() && alive <= 1);
       } else {
         const alive = this.ships.filter((s) => s.alive).length;
         const humansAlive = this.players.some((p, i) => !p.bot && this.ships[i].alive);
@@ -1282,7 +1289,7 @@ export class MpSession {
     const spot = this.pickRespawnSpot(ship.width);
     ship.x = spot.x;
     ship.y = spot.y;
-    ship.heading = Math.random() * Math.PI * 2;
+    ship.heading = this.pickClearHeading(spot.x, spot.y);
     ship.health = ship.maxHealth;
     ship.sinkProgress = 0;
     ship.shield = 0;
@@ -1299,19 +1306,52 @@ export class MpSession {
     this.respawnAt[i] = Infinity;
   }
 
-  /** A clear point in the central 50% of the arena — off the islands and not
-   *  right on top of a ship that's still afloat. */
+  /** A clear point in the central 50% of the arena — with real water between
+   *  it and any island (a fresh captain must never spawn kissing the sand),
+   *  and not right on top of a ship that's still afloat. */
   private pickRespawnSpot(width: number): { x: number; y: number } {
     const span = 1 - 2 * RESPAWN_BAND;
     let spot = { x: WORLD_W / 2, y: WORLD_H / 2 };
-    for (let attempt = 0; attempt < 30; attempt++) {
+    for (let attempt = 0; attempt < 40; attempt++) {
       const x = WORLD_W * (RESPAWN_BAND + Math.random() * span);
       const y = WORLD_H * (RESPAWN_BAND + Math.random() * span);
-      if (shipHitsIsland(this.islands, { x, y, width })) continue;
+      if (shipHitsIsland(this.islands, { x, y, width }) || this.nearIsland(x, y, RESPAWN_CLEAR)) continue;
       spot = { x, y };
       if (this.ships.every((s) => !s.alive || Math.hypot(s.x - x, s.y - y) > 140)) break;
     }
     return spot;
+  }
+
+  /** Is (x, y) within `margin` px of any island's sand? */
+  private nearIsland(x: number, y: number, margin: number): boolean {
+    for (const island of this.islands) {
+      for (const c of island.circles) {
+        if (Math.hypot(x - c.x, y - c.y) < c.r + margin) return true;
+      }
+    }
+    return false;
+  }
+
+  /** A spawn heading whose first seconds of sailing are open water, so nobody
+   *  materializes bow-first into a beach. Probes several distances along
+   *  candidate headings; falls back to random if the spot is boxed in. */
+  private pickClearHeading(x: number, y: number): number {
+    const tries = 12;
+    const base = Math.random() * Math.PI * 2;
+    for (let k = 0; k < tries; k++) {
+      const h = base + (k * Math.PI * 2) / tries;
+      let clear = true;
+      for (const d of [70, 140, 210]) {
+        const px = (((x + Math.cos(h) * d) % WORLD_W) + WORLD_W) % WORLD_W;
+        const py = (((y + Math.sin(h) * d) % WORLD_H) + WORLD_H) % WORLD_H;
+        if (this.nearIsland(px, py, 30)) {
+          clear = false;
+          break;
+        }
+      }
+      if (clear) return h;
+    }
+    return base;
   }
 
   // ── Whirlpool (host) ────────────────────────────────────────────────────────
