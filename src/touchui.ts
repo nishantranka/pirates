@@ -1,6 +1,9 @@
-// Shared on-screen touch controls: a floating steer stick, a fire button, and
-// (for submarines) a dive toggle. Used by both practice battles (game.ts) and
-// multiplayer (multiplayer.ts) so the two modes feel identical under thumbs.
+// Mobile controls and combat assists: tap-to-sail steering, a dive toggle for
+// submarines, autofire, and the incoming-shot warning. Used by both practice
+// battles (game.ts) and multiplayer (multiplayer.ts) so the two modes feel
+// identical under thumbs. Desktop keyboard play is untouched by all of it.
+
+import { wrapDelta } from './ship';
 
 export interface BtnRect {
   x: number;
@@ -55,17 +58,15 @@ export function turnToward(desired: number, heading: number): -1 | 0 | 1 {
 }
 
 export interface TouchButtons {
-  fire: BtnRect;
   dive: BtnRect; // only drawn/used when your ship is a submarine
 }
 
-/** Fire under the right thumb; dive stacked above it. Steering has no fixed
- *  rect — the stick anchors wherever the other thumb lands. */
+/** Guns autofire on touch, so the only button is the submarine's dive toggle,
+ *  under the right thumb. Steering has no fixed rect — taps set the course. */
 export function layoutTouchButtons(w: number, h: number): TouchButtons {
   const by = h - BTN_MARGIN - BTN_SIZE - safeBottom;
   return {
-    fire: { x: w - BTN_MARGIN - BTN_SIZE, y: by, w: BTN_SIZE, h: BTN_SIZE },
-    dive: { x: w - BTN_MARGIN - BTN_SIZE, y: by - BTN_SIZE - 12, w: BTN_SIZE, h: BTN_SIZE },
+    dive: { x: w - BTN_MARGIN - BTN_SIZE, y: by, w: BTN_SIZE, h: BTN_SIZE },
   };
 }
 
@@ -132,8 +133,6 @@ export function drawTouchBtn(
  *  to the game, which converts `steerPt` through its own camera. Fire is
  *  press-and-hold; dive is a tap toggle so submariners don't hold a finger. */
 export class TouchControls {
-  /** True while a finger is on the fire button. */
-  fire = false;
   /** Dive toggle state — tap flips it; the game surfaces the sub when the
    *  charge runs out, but the toggle stays until tapped off. */
   dive = false;
@@ -153,7 +152,6 @@ export class TouchControls {
     const sy = h / rect.height;
     const btns = layoutTouchButtons(w, h);
 
-    let fire = false;
     let diveHit = false;
     let steer: { x: number; y: number } | null = null;
     let claim: { id: number; x: number; y: number } | null = null;
@@ -161,9 +159,8 @@ export class TouchControls {
       const tx = (t.clientX - rect.left) * sx;
       const ty = (t.clientY - rect.top) * sy;
       // The steering finger stays the steering finger even if it wanders over
-      // a button; only new touches are hit-tested against the buttons.
+      // the button; only new touches are hit-tested against it.
       if (t.identifier === this.steerId) steer = { x: tx, y: ty };
-      else if (hitBtn(btns.fire, tx, ty)) fire = true;
       else if (sub && hitBtn(btns.dive, tx, ty)) diveHit = true;
       else if (claim === null) claim = { id: t.identifier, x: tx, y: ty };
     }
@@ -176,14 +173,12 @@ export class TouchControls {
     else this.everSteered = true;
     this.steerPt = steer;
 
-    this.fire = fire;
     if (diveHit && !this.diveHeld) this.dive = !this.dive;
     this.diveHeld = diveHit;
   }
 
   /** Forget all touch state (battle ended, session left). */
   reset() {
-    this.fire = false;
     this.dive = false;
     this.steerPt = null;
     this.steerId = null;
@@ -194,7 +189,6 @@ export class TouchControls {
    *  button so the player sees how much air is left without a separate HUD. */
   draw(ctx: CanvasRenderingContext2D, w: number, h: number, sub: boolean, charge = 1) {
     const btns = layoutTouchButtons(w, h);
-    drawTouchBtn(ctx, btns.fire, '🔥', this.fire);
     if (sub) {
       drawTouchBtn(ctx, btns.dive, '🤿', this.dive);
       const d = btns.dive;
@@ -217,6 +211,99 @@ export class TouchControls {
       ctx.fillText('👆 tap the sea to set course', w / 2, h - BTN_MARGIN - safeBottom - 6);
     }
   }
+}
+
+// ── Mobile combat assists ────────────────────────────────────────────────────
+// Touch play is hands-full, so on touch devices the local player's inputs get
+// help. These are input/HUD assists only — the simulation is unchanged, and a
+// phone player's shots obey exactly the same reload, range and falloff rules
+// as everyone else's.
+
+const AUTOFIRE_RANGE = 300; // px — under max cannon range so falloff still stings
+const AUTOFIRE_TORPEDO_RANGE = 700; // px — don't waste torpedoes cross-map
+const THREAT_HORIZON = 1.0; // s of shot flight considered for the warning
+const THREAT_RADIUS = 55; // px — how near a passing shot must come to count
+
+function relAngle(a: number): number {
+  while (a > Math.PI) a -= Math.PI * 2;
+  while (a < -Math.PI) a += Math.PI * 2;
+  return a;
+}
+
+export interface AssistTarget {
+  x: number;
+  y: number;
+  alive: boolean;
+  hidden: boolean; // submerged submarine — can't be seen, shouldn't be shot at
+  shielded: boolean; // spawn protection — shots would be wasted
+}
+
+/** Autofire: should the local ship shoot this frame? Broadsides fire when an
+ *  enemy sits near either beam inside cannon range; submarines when one is
+ *  roughly dead ahead. */
+export function autoFireWanted(
+  me: { x: number; y: number; heading: number },
+  sub: boolean,
+  targets: AssistTarget[],
+  wrapW: number,
+  wrapH: number,
+): boolean {
+  for (const t of targets) {
+    if (!t.alive || t.hidden || t.shielded) continue;
+    const dx = wrapDelta(t.x - me.x, wrapW);
+    const dy = wrapDelta(t.y - me.y, wrapH);
+    const dist = Math.hypot(dx, dy);
+    const bearing = relAngle(Math.atan2(dy, dx) - me.heading);
+    if (sub) {
+      if (dist < AUTOFIRE_TORPEDO_RANGE && Math.abs(bearing) < 0.28) return true;
+    } else if (dist < AUTOFIRE_RANGE && Math.abs(Math.sin(bearing)) > 0.5) {
+      // |sin| > 0.5 ⇔ within ±60° of one of the beams, where the guns point.
+      return true;
+    }
+  }
+  return false;
+}
+
+/** Bearings (world rad, from the ship) of shots that will pass within
+ *  THREAT_RADIUS of it inside THREAT_HORIZON seconds. Your own shots exclude
+ *  themselves naturally — they fly away from you, never closing. */
+export function incomingThreats(
+  me: { x: number; y: number },
+  balls: Array<{ x: number; y: number; vx: number; vy: number }>,
+  wrapW: number,
+  wrapH: number,
+): number[] {
+  const out: number[] = [];
+  for (const b of balls) {
+    const dx = wrapDelta(me.x - b.x, wrapW);
+    const dy = wrapDelta(me.y - b.y, wrapH);
+    const v2 = b.vx * b.vx + b.vy * b.vy;
+    if (v2 <= 0) continue;
+    const t = (dx * b.vx + dy * b.vy) / v2; // time of closest approach
+    if (t <= 0 || t > THREAT_HORIZON) continue;
+    const ex = dx - b.vx * t;
+    const ey = dy - b.vy * t;
+    if (Math.hypot(ex, ey) > THREAT_RADIUS) continue;
+    out.push(Math.atan2(-dy, -dx)); // bearing from the ship toward the shot
+  }
+  return out;
+}
+
+/** Red pulsing arc at the ship's rim pointing at an incoming shot — you can
+ *  only dodge what you can see, and on a phone you otherwise can't see it. */
+export function drawThreatArc(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  r: number,
+  bearing: number,
+) {
+  const pulse = 0.5 + 0.3 * Math.sin(performance.now() / 90);
+  ctx.strokeStyle = `rgba(255, 70, 70, ${pulse})`;
+  ctx.lineWidth = 4;
+  ctx.beginPath();
+  ctx.arc(x, y, r, bearing - 0.55, bearing + 0.55);
+  ctx.stroke();
 }
 
 /** The course buoy: a gold marker with a pulsing ring, drawn by the game in
