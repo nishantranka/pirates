@@ -102,6 +102,13 @@ const PICKUP_HASTE_SCORE = 0.55; // ...and they respawn faster too (interval mul
 const PICKUP_R = 15; // px
 const PICKUP_TTL = 20; // s before an uncollected pickup relocates
 const SPAWN_PROTECT = 2; // s of spawn invulnerability while ships scatter
+
+// Mines: Enter lays one behind a ship's stern, then a per-captain cooldown
+// before the next. Armed for everyone, including whoever laid it — a
+// one-shot kill, no falloff, no shield check, but spawn-protected ships
+// pass over safely like they do any other hazard.
+const MINE_COOLDOWN = 30; // s before that captain can lay another
+const MINE_R = 14; // px, visual + trigger radius
 const START_FREEZE = 3; // s everyone holds still at round start to find their ship
 
 // Leaderboard is a fixed-length deathmatch: sink as many as you can before the
@@ -261,6 +268,13 @@ interface Pickup {
   ttl: number;
 }
 
+interface Mine {
+  id: number;
+  x: number;
+  y: number;
+  by: number; // ship index that laid it, for scoring credit
+}
+
 /** Host-side timers for a ship's active power-ups (in battle-clock seconds). */
 interface Buff {
   doubleUntil: number;
@@ -339,6 +353,7 @@ interface HostPlayer {
   fire: boolean;
   dive: boolean;
   reload: boolean; // latched R request (humans); consumed by the fire tick
+  mine: boolean; // latched Enter request; consumed by the mine-laying tick
   touch: boolean; // captain is on a touch screen (no R key — taps reload instead)
 }
 
@@ -394,6 +409,9 @@ export class MpSession {
   private pickups: Pickup[] = [];
   private pickupId = 0;
   private pickupTimers: Record<PickupType, number> = { ...ZERO_TIMERS };
+  private mines: Mine[] = []; // host-authoritative; mirrored wholesale to guests via snapshots
+  private mineId = 0;
+  private mineCooldown: number[] = []; // per-ship seconds until they can lay another (host)
   private buffs: Buff[] = []; // host-authoritative
   private buffView: BuffView[] = []; // render state (host + guest)
   private scores: Score[] = []; // host-authoritative
@@ -511,7 +529,7 @@ export class MpSession {
   ): MpSession {
     const s = new MpSession(true, ctx, input, cb, sounds);
     s.players = [
-      { conn: null, name: cleanName(name), ship: 'small', ready: false, connected: true, bot: false, turn: 0, fire: false, dive: false, reload: false, touch: false },
+      { conn: null, name: cleanName(name), ship: 'small', ready: false, connected: true, bot: false, turn: 0, fire: false, dive: false, reload: false, mine: false, touch: false },
     ];
     // Open the lobby immediately so bot play never waits on (or requires) the
     // matchmaking broker; the room code fills in when/if the broker responds.
@@ -590,6 +608,7 @@ export class MpSession {
       fire: false,
       dive: false,
       reload: false,
+      mine: false,
       touch: false,
     };
   }
@@ -726,6 +745,7 @@ export class MpSession {
         fire: false,
         dive: false,
         reload: false,
+        mine: false,
         touch: false,
       });
       this.pushLobby();
@@ -746,6 +766,7 @@ export class MpSession {
       player.fire = !!msg.fire;
       player.dive = !!msg.dive;
       if (msg.reload) player.reload = true; // latch only; the fire tick clears it
+      if (msg.mine) player.mine = true; // latch only; the mine tick clears it
       player.touch = !!msg.touch;
     }
   }
@@ -801,6 +822,7 @@ export class MpSession {
       fire: false,
       dive: false,
       reload: false,
+      mine: false,
       touch: false,
     };
     this.players.push(player);
@@ -826,6 +848,7 @@ export class MpSession {
     this.respawnAt.push(Infinity);
     this.moveFreezeUntil.push(this.clock + RESPAWN_FREEZE);
     this.diveCharge.push(DIVE_MAX);
+    this.mineCooldown.push(0);
     const cap = SHIP_TYPES[spawn.type].guns * MAG_BROADSIDES;
     this.magCap.push(cap);
     this.mag.push(cap);
@@ -916,6 +939,8 @@ export class MpSession {
     // Reset power-up state for the round.
     this.clock = 0;
     this.pickups = [];
+    this.mines = [];
+    this.mineCooldown = this.spawns.map(() => 0); // everyone can lay their first mine right away
     this.buffs = this.spawns.map(() => ({
       doubleUntil: 0,
       speedUntil: 0,
@@ -998,6 +1023,7 @@ export class MpSession {
       this.players[0].fire = this.input.isDown('Space');
       this.players[0].dive = this.input.isDown('ArrowDown') || this.input.isDown('KeyS');
       if (this.input.wasPressed('KeyR')) this.players[0].reload = true; // latch; fire tick consumes
+      if (this.input.wasPressed('Enter')) this.players[0].mine = true; // latch; mine tick consumes
       this.players[0].touch = this.isTouchDevice;
 
       const eye =
@@ -1057,6 +1083,7 @@ export class MpSession {
     if (this.phase === 'battle') this.updateRams(dt);
     if (this.phase === 'battle') this.updateWhirlpool(dt);
     if (this.phase === 'battle') this.updatePickups(dt);
+    if (this.phase === 'battle') this.updateMines(dt);
 
     if (this.phase === 'battle') {
       this.ships.forEach((ship, i) => {
@@ -1557,6 +1584,52 @@ export class MpSession {
     this.pickups = this.pickups.filter((p) => p.ttl > 0);
   }
 
+  private updateMines(dt: number) {
+    // Cooldown runs for everyone regardless of whether their ship is afloat
+    // right now, so a fresh respawn isn't stuck waiting on a dead ship's clock.
+    for (let i = 0; i < this.mineCooldown.length; i++) {
+      this.mineCooldown[i] = Math.max(0, this.mineCooldown[i] - dt);
+    }
+
+    // Laying: a fresh Enter press, off cooldown, from a ship free to act.
+    this.ships.forEach((ship, i) => {
+      const player = this.players[i];
+      if (!player.mine) return;
+      player.mine = false; // consume the latched request either way
+      if (!ship.alive || !player.connected || this.moveFrozen(i) || this.mineCooldown[i] > 0) return;
+      this.mines.push({
+        id: this.mineId++,
+        x: ship.x - Math.cos(ship.heading) * ship.length * 0.9,
+        y: ship.y - Math.sin(ship.heading) * ship.length * 0.9,
+        by: i,
+      });
+      this.mineCooldown[i] = MINE_COOLDOWN;
+    });
+
+    // Detonation: any hull touching an armed mine is destroyed outright — no
+    // shield, no falloff, whoever laid it included. Spawn-protected ships
+    // pass over safely, like every other hazard.
+    const triggered = new Set<number>();
+    for (const mine of this.mines) {
+      for (let i = 0; i < this.ships.length; i++) {
+        const ship = this.ships[i];
+        if (!ship.alive || ship.depth > SUB_IMMUNE) continue; // submerged subs pass over
+        if (this.spawnUntil[i] > this.clock) continue;
+        if (Math.hypot(ship.x - mine.x, ship.y - mine.y) >= MINE_R + ship.width * 0.6) continue;
+        const before = ship.health;
+        while (ship.alive) ship.takeHit();
+        if (mine.by !== i) {
+          this.scores[mine.by].damage += before;
+          this.scores[mine.by].kills++;
+        }
+        this.pendingEvents.push({ e: 'hit', x: mine.x, y: mine.y, by: mine.by, on: i });
+        triggered.add(mine.id);
+        break;
+      }
+    }
+    if (triggered.size) this.mines = this.mines.filter((m) => !triggered.has(m.id));
+  }
+
   /** A tempting-but-dangerous spot: usually just off an island's lethal shore. */
   private pickDifficultSpot(): { x: number; y: number } | null {
     for (let attempt = 0; attempt < 24; attempt++) {
@@ -1675,11 +1748,13 @@ export class MpSession {
         kills: this.scoreView[i]?.kills ?? 0,
         ammo: this.mag[i] ?? 0,
         rl: this.reloadT[i] > 0 ? this.reloadT[i] / MAG_RELOAD : 0,
+        mineCd: this.mineCooldown[i] ?? 0,
       })),
       balls: this.balls.map((b) => ({ x: b.x, y: b.y, vx: b.vx, vy: b.vy, tp: b.torpedo })),
       wind: this.wind.direction,
       events: this.pendingEvents,
       pickups: this.pickups.map((p) => ({ t: p.type, x: p.x, y: p.y })),
+      mines: this.mines.map((m) => ({ x: m.x, y: m.y })),
       eye: this.eyeR,
       freeze: this.freeze,
       timeLeft: this.timeLeft,
@@ -1743,12 +1818,14 @@ export class MpSession {
           kills: 0,
           ammo: SHIP_TYPES[sp.type].guns * MAG_BROADSIDES,
           rl: 0,
+          mineCd: 0,
         }));
         this.buffView = msg.ships.map(() => ({ shield: 0, spd: false, dbl: false, mg: false, inv: true }));
         this.scoreView = msg.ships.map(() => ({ score: 0, kills: 0 }));
         this.guestCharge = msg.ships.map(() => 1);
         this.eyeR = EYE_MAX;
         this.pickups = [];
+        this.mines = [];
         this.balls = [];
         this.ballStates = [];
         this.explosions = [];
@@ -1785,6 +1862,7 @@ export class MpSession {
             kills: 0,
             ammo: SHIP_TYPES[sp.type].guns * MAG_BROADSIDES,
             rl: 0,
+            mineCd: 0,
           });
           this.buffView.push({ shield: 0, spd: false, dbl: false, mg: false, inv: true });
           this.scoreView.push({ score: 0, kills: 0 });
@@ -1797,6 +1875,7 @@ export class MpSession {
         this.targets = msg.ships;
         this.ballStates = msg.balls;
         this.pickups = msg.pickups.map((p) => ({ id: 0, type: p.t, x: p.x, y: p.y, ttl: 1 }));
+        this.mines = msg.mines.map((m) => ({ id: 0, x: m.x, y: m.y, by: -1 }));
         this.eyeR = msg.eye;
         this.freeze = msg.freeze;
         this.timeLeft = msg.timeLeft;
@@ -1828,21 +1907,23 @@ export class MpSession {
             : 0;
       const fire = this.input.isDown('Space');
       const dive = this.input.isDown('ArrowDown') || this.input.isDown('KeyS');
-      // A one-shot reload pulse (touch taps to reload are inferred host-side
-      // from an empty-magazine fire, so only the R key needs sending).
+      // One-shot pulses: touch taps to reload are inferred host-side from an
+      // empty-magazine fire, so only the keys need sending.
       const reload = this.input.wasPressed('KeyR');
+      const mine = this.input.wasPressed('Enter');
       this.inputAcc += dt;
       if (
         turn !== this.lastSent.turn ||
         fire !== this.lastSent.fire ||
         dive !== this.lastSent.dive ||
         reload ||
+        mine ||
         this.inputAcc >= INPUT_INTERVAL
       ) {
         this.inputAcc = 0;
         this.lastSent = { turn, fire, dive };
         if (this.conn?.open)
-          this.conn.send({ t: 'input', turn, fire, dive, reload, touch: this.isTouchDevice } satisfies C2HMsg);
+          this.conn.send({ t: 'input', turn, fire, dive, reload, mine, touch: this.isTouchDevice } satisfies C2HMsg);
       }
     }
 
@@ -2119,6 +2200,7 @@ export class MpSession {
     for (const island of this.islands) drawIsland(ctx, island);
 
     this.drawPickups();
+    this.drawMines();
 
     if (this.isHost) {
       for (const ball of this.balls) ball.draw(ctx);
@@ -2147,6 +2229,7 @@ export class MpSession {
           this.drawYouMarker(ship);
           if (ship.type === 'submarine') this.drawDiveMeter(ship, i);
           this.drawShipAmmo(ship);
+          this.drawMineStatus(ship);
         }
       }
     });
@@ -2245,6 +2328,38 @@ export class MpSession {
       ctx.strokeText(meta.label, p.x, yy + PICKUP_R + 3);
       ctx.fillStyle = '#fff';
       ctx.fillText(meta.label, p.x, yy + PICKUP_R + 3);
+    }
+  }
+
+  /** Floating naval mines: a spiked ball with a faint pulsing danger ring. */
+  private drawMines() {
+    const ctx = this.ctx;
+    for (const mine of this.mines) {
+      ctx.save();
+      ctx.translate(mine.x, mine.y);
+      for (let i = 0; i < 8; i++) {
+        const a = (i / 8) * Math.PI * 2;
+        ctx.strokeStyle = '#1c1c1c';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(Math.cos(a) * MINE_R * 0.55, Math.sin(a) * MINE_R * 0.55);
+        ctx.lineTo(Math.cos(a) * MINE_R, Math.sin(a) * MINE_R);
+        ctx.stroke();
+      }
+      ctx.fillStyle = '#2a2a2a';
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.35)';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.arc(0, 0, MINE_R * 0.55, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+      ctx.globalAlpha = 0.35 + 0.25 * Math.sin(performance.now() / 400);
+      ctx.strokeStyle = '#ff3b3b';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.arc(0, 0, MINE_R + 4, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.restore();
     }
   }
 
@@ -2424,6 +2539,28 @@ export class MpSession {
         ctx.fillRect(x0 + k * (pipW + gap), y, pipW, pipH);
       }
     }
+    ctx.restore();
+  }
+
+  /** Your own mine-laying readiness, just below the ammo row: a countdown
+   *  while on cooldown, or a ready prompt once Enter will lay another. */
+  private drawMineStatus(ship: Ship) {
+    const cd = this.isHost ? this.mineCooldown[this.you] : (this.targets[this.you]?.mineCd ?? 0);
+    const ready = cd <= 0;
+    const text = ready ? '💣 Enter: lay mine' : `💣 ${Math.ceil(cd)}s`;
+    const y = ship.y + ship.length * 0.62 + 9; // below the ammo pip row
+
+    const ctx = this.ctx;
+    ctx.save();
+    ctx.globalAlpha = 1 - ship.sinkProgress;
+    ctx.font = 'bold 10px system-ui, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'top';
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = 'rgba(0, 0, 0, 0.6)';
+    ctx.strokeText(text, ship.x, y);
+    ctx.fillStyle = ready ? '#ffe07a' : 'rgba(255, 255, 255, 0.55)';
+    ctx.fillText(text, ship.x, y);
     ctx.restore();
   }
 

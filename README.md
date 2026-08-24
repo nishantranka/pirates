@@ -54,6 +54,11 @@ starts the battle once 2–11 captains are in.
   a boosted or Large ship is a battering ram. Glancing scrapes just shove ships
   apart; the rammer only takes ~10% back. Bots seek rams when they hold the
   advantage. (Knockback never pushes a ship onto a lethal island.)
+- **Mines** — press **Enter** to lay one astern of your ship (available in
+  practice mode too), then a **30-second cooldown** before you can lay
+  another. It sits there, armed, until any hull touches it — including your
+  own — and destroys that ship outright: no shield, no falloff. Spawn-shielded
+  ships pass over safely, and submerged submarines pass under.
 - **Power-ups** — bounties bob in the water (often just off an island's lethal
   shore, so grabbing them is a risk): **❤️ Health** (+1 hp, common),
   **🛡️ Shield** (soak the next 5 hits), **⚡ Speed** (double speed), **↔️ Double**
@@ -127,6 +132,7 @@ starts the battle once 2–11 captains are in.
 | `1` / `2` / `3` | Choose difficulty (easy / medium / hard) |
 | `←` / `→` or `A` / `D` | Steer left / right |
 | `Space` | Fire a broadside |
+| `Enter` | Lay a mine (30s cooldown) |
 | `R` | After a battle ends, return to ship select |
 
 Your ship is always under sail and moves forward on its own — you only steer,

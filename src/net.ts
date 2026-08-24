@@ -59,6 +59,7 @@ export interface ShipState {
   kills: number; // enemies sunk
   ammo: number; // shells left in the magazine (host-authoritative)
   rl: number; // magazine reload progress remaining, 1→0; 0 = loaded
+  mineCd: number; // seconds until this captain can lay another mine, 0 = ready
 }
 
 export interface BallState {
@@ -67,6 +68,11 @@ export interface BallState {
   vx: number;
   vy: number;
   tp?: boolean; // torpedo (rendered differently)
+}
+
+export interface MineState {
+  x: number;
+  y: number;
 }
 
 // `by`/`on` are ship indices so each client can play sound only for events it's
@@ -84,7 +90,7 @@ export type C2HMsg =
   | { t: 'hello'; name: string }
   | { t: 'choose'; ship: ShipTypeName }
   | { t: 'ready'; ready: boolean }
-  | { t: 'input'; turn: Turn; fire: boolean; dive: boolean; reload: boolean; touch: boolean };
+  | { t: 'input'; turn: Turn; fire: boolean; dive: boolean; reload: boolean; mine: boolean; touch: boolean };
 
 /** Host → guest. */
 export type H2CMsg =
@@ -103,6 +109,7 @@ export type H2CMsg =
       wind: number;
       events: GameEvent[];
       pickups: PickupState[];
+      mines: MineState[];
       eye: number; // whirlpool eye radius in px (shrinks over time; large = no maelstrom yet)
       freeze: number; // start-of-round locate-your-ship pause remaining, s
       timeLeft: number; // Leaderboard match seconds remaining; -1 in untimed (Survivor) matches

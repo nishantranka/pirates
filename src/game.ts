@@ -20,6 +20,20 @@ const WAVE_DRIFT = 14;
 const MAG_BROADSIDES = 3; // full magazine = 3 broadsides for every hull
 const MAG_RELOAD = 2; // s to reload and refill the magazine
 
+// ── Mines (practice mode, player only) ──────────────────────────────────────
+// Press Enter to lay one behind your stern (so you don't blow yourself up the
+// instant you drop it); it then sits there, armed, until any hull touches it —
+// yours included. One-shot kill, no falloff, no shield check.
+const MINE_COOLDOWN = 30; // s before you can lay another
+const MINE_R = 14; // px, visual + trigger radius
+const MINE_DROP_OFFSET = 0.9; // × ship.length astern of the stern
+
+interface Mine {
+  id: number;
+  x: number;
+  y: number;
+}
+
 export const DIFFICULTIES = {
   easy: { label: 'Easy', reload: 2.2, leadShots: false, windAware: false },
   medium: { label: 'Medium', reload: 1.8, leadShots: true, windAware: false },
@@ -59,6 +73,9 @@ export class Game {
   private ammo = 0; // player bullets remaining in the magazine
   private ammoCap = 0; // player magazine capacity (guns × MAG_BROADSIDES)
   private reloadTimer = 0; // s left on the manual reload, 0 when not reloading
+  private mines: Mine[] = [];
+  private mineId = 0;
+  private mineCooldown = 0; // s until the player can lay another mine, 0 = ready
 
   /** Set by main.ts; called once when the battle ends (won = enemy sunk). */
   onGameOver: ((won: boolean) => void) | null = null;
@@ -143,6 +160,8 @@ export class Game {
     this.wind = new Wind();
     this.gameOverFired = false;
     this.survivorKills = null;
+    this.mines = [];
+    this.mineCooldown = 0; // ready to lay the first one immediately
     this.phase = 'battle';
   }
 
@@ -312,6 +331,14 @@ export class Game {
       if (!playerHidden && wantsToFire(this.enemy, this.player, aiOpts) && this.enemy.reload <= 0) {
         this.fireBroadside(this.enemy, diff.reload);
       }
+
+      // Mines: Enter lays one behind your stern, then a 30s cooldown before
+      // the next. Only the player lays mines; both hulls can trigger one.
+      if (this.mineCooldown > 0) this.mineCooldown = Math.max(0, this.mineCooldown - dt);
+      if (this.input.wasPressed('Enter') && this.mineCooldown === 0) {
+        this.dropMine();
+        this.mineCooldown = MINE_COOLDOWN;
+      }
     }
 
     for (const ball of this.cannonballs) {
@@ -326,6 +353,23 @@ export class Game {
       }
     }
     this.cannonballs = this.cannonballs.filter((b) => !b.spent);
+
+    // Mines: a one-shot kill for whichever hull touches one first, no shield
+    // or falloff — armed for both captains, including whoever laid it.
+    const triggered = new Set<number>();
+    for (const mine of this.mines) {
+      for (const ship of [this.player, this.enemy]) {
+        if (!ship.alive || ship.depth > DIVE.immune) continue; // submerged subs pass over
+        if (Math.hypot(ship.x - mine.x, ship.y - mine.y) < MINE_R + ship.width * 0.6) {
+          while (ship.alive) ship.takeHit();
+          this.explosions.push(new Explosion(mine.x, mine.y));
+          this.onHit?.(ship === this.player);
+          triggered.add(mine.id);
+          break;
+        }
+      }
+    }
+    if (triggered.size) this.mines = this.mines.filter((m) => !triggered.has(m.id));
 
     for (const ex of this.explosions) ex.update(dt);
     this.explosions = this.explosions.filter((ex) => !ex.done);
@@ -426,6 +470,16 @@ export class Game {
     shooter.reload = reload;
   }
 
+  /** Lay a mine astern of the player, clear of the hull that just dropped it. */
+  private dropMine() {
+    const p = this.player;
+    this.mines.push({
+      id: this.mineId++,
+      x: p.x - Math.cos(p.heading) * p.length * MINE_DROP_OFFSET,
+      y: p.y - Math.sin(p.heading) * p.length * MINE_DROP_OFFSET,
+    });
+  }
+
   private render() {
     // High-DPI: draw in CSS pixels on a device-pixel backing store.
     this.ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
@@ -433,6 +487,7 @@ export class Game {
     if (this.phase === 'idle') return;
 
     const ctx = this.ctx;
+    this.drawMines();
     for (const ball of this.cannonballs) ball.draw(ctx);
     this.player.drawWrapped(ctx, this.viewW, this.viewH);
     this.enemy.drawWrapped(ctx, this.viewW, this.viewH);
@@ -446,7 +501,10 @@ export class Game {
       ctx.fillStyle = '#4fd8ef';
       ctx.fillRect(this.player.x - w2 / 2, y, (w2 * this.diveCharge) / DIVE.max, 3);
     }
-    if (this.player.alive && !this.over) this.drawAmmo();
+    if (this.player.alive && !this.over) {
+      this.drawAmmo();
+      this.drawMineStatus();
+    }
     for (const ex of this.explosions) ex.draw(ctx);
 
     // Mobile assist: flag shots that are about to reach you.
@@ -498,6 +556,58 @@ export class Game {
       }
     }
 
+  }
+
+  /** Floating naval mines: a spiked ball with a faint pulsing danger ring. */
+  private drawMines() {
+    const ctx = this.ctx;
+    for (const mine of this.mines) {
+      ctx.save();
+      ctx.translate(mine.x, mine.y);
+      for (let i = 0; i < 8; i++) {
+        const a = (i / 8) * Math.PI * 2;
+        ctx.strokeStyle = '#1c1c1c';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(Math.cos(a) * MINE_R * 0.55, Math.sin(a) * MINE_R * 0.55);
+        ctx.lineTo(Math.cos(a) * MINE_R, Math.sin(a) * MINE_R);
+        ctx.stroke();
+      }
+      ctx.fillStyle = '#2a2a2a';
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.35)';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.arc(0, 0, MINE_R * 0.55, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+      ctx.globalAlpha = 0.35 + 0.25 * Math.sin(performance.now() / 400);
+      ctx.strokeStyle = '#ff3b3b';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.arc(0, 0, MINE_R + 4, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.restore();
+    }
+  }
+
+  /** Mine-laying readiness under the ammo row: a countdown while on cooldown,
+   *  or a ready prompt once Enter will lay another. */
+  private drawMineStatus() {
+    const ctx = this.ctx;
+    const p = this.player;
+    const y = p.y + p.length * (p.type === 'submarine' ? 1.15 : 0.85);
+    const ready = this.mineCooldown === 0;
+    const text = ready ? '💣 Enter: lay mine' : `💣 ${Math.ceil(this.mineCooldown)}s`;
+    ctx.save();
+    ctx.font = 'bold 11px system-ui, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'top';
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = 'rgba(0, 0, 0, 0.6)';
+    ctx.strokeText(text, p.x, y);
+    ctx.fillStyle = ready ? '#ffe07a' : 'rgba(255, 255, 255, 0.55)';
+    ctx.fillText(text, p.x, y);
+    ctx.restore();
   }
 
   private drawSea() {
