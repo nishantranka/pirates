@@ -75,7 +75,7 @@ const SHIP_ORDER: ShipTypeName[] = ['small', 'medium', 'large'];
 // ── Selection state ───────────────────────────────────────────────────────────
 
 type MenuPath = 'practice' | 'bots' | 'friends';
-type PracticeMode = 'duel' | 'survivor';
+type PracticeMode = 'duel' | 'survivor' | 'base';
 type RoomChoice = 'create' | 'join';
 
 let selectedPath: MenuPath | null = null;
@@ -134,7 +134,10 @@ interface Step {
 }
 
 const STEPS: Record<string, Step> = {
-  ptype: { id: 'ptype', crumb: () => (selectedPractice === 'duel' ? '1v1' : 'Survivor') },
+  ptype: {
+    id: 'ptype',
+    crumb: () => practiceOptions.find((p) => p.key === selectedPractice)?.label ?? selectedPractice,
+  },
   ship: { id: 'ship', crumb: () => titleCase(selectedShip) },
   enemy: {
     id: 'enemy',
@@ -146,7 +149,10 @@ const STEPS: Record<string, Step> = {
     crumb: () => DIFFICULTIES[selectedDifficulty].label,
     action: () => ({ label: '⚓ Set Sail', run: setSail }),
   },
-  bmode: { id: 'bmode', crumb: () => (selectedArenaMode === 'score' ? 'Leaderboard' : 'Survivor') },
+  bmode: {
+    id: 'bmode',
+    crumb: () => mpModeOptions.find((m) => m.key === selectedArenaMode)?.label ?? selectedArenaMode,
+  },
   bcount: {
     id: 'bcount',
     crumb: () => `${selectedBots} bots`,
@@ -295,17 +301,19 @@ rootOptions.forEach(({ key, glyph, label, stat }) => {
 /** Roll a whole Bots Arena — win condition, hull, fleet size — and sail. */
 function feelingLucky() {
   selectedPath = 'bots';
-  selectedArenaMode = pickOne<MpMode>(['score', 'survival']);
+  selectedArenaMode = pickOne<MpMode>(['score', 'survival', 'base']);
   selectedShip = pickOne(Object.keys(SHIP_TYPES) as ShipTypeName[]);
   selectedBots = pickOne(BOT_COUNTS);
   startBotsArena();
 }
 
-// Practice sub-modes: a single duel or endless survivor waves, both vs bot AI.
+// Practice sub-modes: a single duel, endless survivor waves, or a siege on
+// each other's base — all vs bot AI.
 const ptypeRow = document.getElementById('ptype-cards')!;
 const practiceOptions: Array<{ key: PracticeMode; label: string; stat: string }> = [
   { key: 'duel', label: '1v1', stat: 'one battle · win or lose' },
   { key: 'survivor', label: 'Survivor', stat: 'endless waves · fight until you sink' },
+  { key: 'base', label: 'Destroy Base', stat: 'sinking just sends you home — wreck their base' },
 ];
 practiceOptions.forEach(({ key, label, stat }) => {
   const card = makeCard(label, stat, key);
@@ -355,10 +363,11 @@ const diffRow = document.getElementById('difficulty-cards')!;
 
 // ── Bots Arena cards ──────────────────────────────────────────────────────────
 
-// The win condition — the same two the lobby offers, asked up front instead.
+// The win condition — the same three the lobby offers, asked up front instead.
 const mpModeOptions: Array<{ key: MpMode; label: string; stat: string }> = [
   { key: 'score', label: 'Leaderboard', stat: '90s deathmatch · respawns' },
   { key: 'survival', label: 'Survivor', stat: 'last one standing wins' },
+  { key: 'base', label: 'Destroy Base', stat: "wreck every rival's base" },
 ];
 
 const bmodeRow = document.getElementById('bmode-cards')!;
@@ -415,7 +424,7 @@ function setSail() {
     startSurvivor();
   } else {
     game.survivorKills = null;
-    game.startBattle(selectedShip, selectedEnemy, selectedDifficulty);
+    game.startBattle(selectedShip, selectedEnemy, selectedDifficulty, selectedPractice === 'base');
   }
 }
 
@@ -445,8 +454,15 @@ game.onGameOver = (won: boolean) => {
     btnHarder.classList.add('hidden');
     btnMenu.classList.remove('hidden');
   } else {
-    // Normal mode.
-    gameoverTitle.textContent = won ? 'Enemy ship destroyed!' : 'Your ship was destroyed!';
+    // Normal mode and Destroy Base — a single win/loss ends the duel either way.
+    gameoverTitle.textContent =
+      selectedPractice === 'base'
+        ? won
+          ? '🏰 Enemy base destroyed!'
+          : '💀 Your base was destroyed!'
+        : won
+          ? 'Enemy ship destroyed!'
+          : 'Your ship was destroyed!';
     const nextDiff = NEXT_DIFFICULTY[selectedDifficulty];
     if (nextDiff) {
       harderLabel.textContent = DIFFICULTIES[nextDiff].label;
@@ -465,7 +481,7 @@ btnReplay.addEventListener('click', () => {
   if (selectedPractice === 'survivor') {
     startSurvivor();
   } else {
-    game.startBattle(selectedShip, selectedEnemy, selectedDifficulty);
+    game.startBattle(selectedShip, selectedEnemy, selectedDifficulty, selectedPractice === 'base');
   }
 });
 
@@ -476,7 +492,7 @@ btnHarder.addEventListener('click', () => {
     selectCard(diffRow, selectedDifficulty);
   }
   gameoverOverlay.classList.add('hidden');
-  game.startBattle(selectedShip, selectedEnemy, selectedDifficulty);
+  game.startBattle(selectedShip, selectedEnemy, selectedDifficulty, selectedPractice === 'base');
 });
 
 btnMenu.addEventListener('click', () => {
@@ -491,7 +507,7 @@ window.addEventListener('keydown', (e) => {
     if (selectedPractice === 'survivor') {
       startSurvivor();
     } else {
-      game.startBattle(selectedShip, selectedEnemy, selectedDifficulty);
+      game.startBattle(selectedShip, selectedEnemy, selectedDifficulty, selectedPractice === 'base');
     }
   }
 });
@@ -700,11 +716,13 @@ function mpCallbacks() {
       game.suspended = true;
     },
     onEnd(winnerName: string | null) {
-      const survival = mp?.gameMode === 'survival';
+      const gameMode = mp?.gameMode;
       mpendTitle.textContent = winnerName
-        ? survival
+        ? gameMode === 'survival'
           ? `⏱️ ${winnerName} outlasted them all!`
-          : `☠️ ${winnerName} rules the seas!`
+          : gameMode === 'base'
+            ? `🏰 ${winnerName}'s base stands victorious!`
+            : `☠️ ${winnerName} rules the seas!`
         : 'Mutual destruction — a draw!';
       // Final standings on the end screen.
       const board = mp?.getLeaderboard() ?? [];

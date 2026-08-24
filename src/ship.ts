@@ -49,6 +49,14 @@ export const RAM = {
   cd: 0.7, // s before the same ship can ram-damage again
 } as const;
 
+/** Destroy Base mode tuning, shared by practice (game.ts) and multiplayer:
+ *  each captain's base sits at their spawn point for the whole match. */
+export const BASE = {
+  hp: SHIP_TYPES.small.maxHealth * 100, // 100× a small hull's hit points
+  r: 45, // px, visual + cannonball trigger radius
+  respawnDelay: 10, // s a sunk ship waits before returning to its own base
+} as const;
+
 /** Fore-aft deck offsets of each broadside gun. The battery sits between
  *  -0.12·length and +0.28·length — shifted toward the bow so it clears the
  *  stern cabin. Shared by the renderer and the cannonball spawn code so shots

@@ -15,8 +15,9 @@ export const CODE_LENGTH = 5;
 
 // ── Wire types ────────────────────────────────────────────────────────────────
 
-/** Multiplayer win condition: weighted score vs pure last-one-standing. */
-export type MpMode = 'score' | 'survival';
+/** Multiplayer win condition: weighted score, pure last-one-standing, or wreck
+ *  every opponent's base. */
+export type MpMode = 'score' | 'survival' | 'base';
 
 export interface LobbyPlayerInfo {
   name: string;
@@ -59,6 +60,7 @@ export interface ShipState {
   kills: number; // enemies sunk
   ammo: number; // shells left in the magazine (host-authoritative)
   rl: number; // magazine reload progress remaining, 1→0; 0 = loaded
+  baseHp: number; // Destroy Base mode: this captain's base HP; unused otherwise
 }
 
 export interface BallState {

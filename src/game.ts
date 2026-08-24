@@ -2,7 +2,7 @@ import { decideTurn, wantsToFire } from './ai';
 import { Cannonball } from './cannonball';
 import { Explosion } from './explosion';
 import type { Input } from './input';
-import { DIVE, gunOffsets, muzzleReach, RAM, SAIL_TYPES, Ship, wrapDelta, YOU_COLOR, type ShipTypeName, type Turn } from './ship';
+import { BASE, DIVE, gunOffsets, muzzleReach, RAM, SAIL_TYPES, Ship, wrapDelta, YOU_COLOR, type ShipTypeName, type Turn } from './ship';
 import { drawThreatArc, haptic, incomingThreats, requestGameFullscreen, TouchControls, touchActive, turnToward } from './touchui';
 import { Wind } from './wind';
 
@@ -41,6 +41,13 @@ interface Wave {
   r: number;
 }
 
+/** Destroy Base mode: a fixed structure at a combatant's starting spot. */
+interface CampBase {
+  x: number;
+  y: number;
+  hp: number;
+}
+
 export class Game {
   private ctx: CanvasRenderingContext2D;
   private input: Input;
@@ -59,8 +66,14 @@ export class Game {
   private ammo = 0; // player bullets remaining in the magazine
   private ammoCap = 0; // player magazine capacity (guns × MAG_BROADSIDES)
   private reloadTimer = 0; // s left on the manual reload, 0 when not reloading
+  private baseMode = false; // Destroy Base: sinking respawns you instead of ending it
+  private playerBase: CampBase = { x: 0, y: 0, hp: 0 };
+  private enemyBase: CampBase = { x: 0, y: 0, hp: 0 };
+  private playerRespawnT = -1; // s left before the player returns to their base; -1 = not pending
+  private enemyRespawnT = -1;
 
-  /** Set by main.ts; called once when the battle ends (won = enemy sunk). */
+  /** Set by main.ts; called once when the battle ends (won = enemy sunk, or —
+   *  in Destroy Base — the enemy's base destroyed). */
   onGameOver: ((won: boolean) => void) | null = null;
   /** Called when the player fires a broadside. */
   onCannonFire: (() => void) | null = null;
@@ -119,7 +132,12 @@ export class Game {
     this.touch.update(e, this.ctx.canvas, this.viewW, this.viewH, this.player?.type === 'submarine');
   };
 
-  startBattle(playerType: ShipTypeName, enemyType: ShipTypeName | 'random', difficulty: DifficultyName) {
+  startBattle(
+    playerType: ShipTypeName,
+    enemyType: ShipTypeName | 'random',
+    difficulty: DifficultyName,
+    baseMode = false,
+  ) {
     // Called from a menu tap, so the fullscreen request has gesture context.
     if (this.isTouchDevice) void requestGameFullscreen();
     this.touch.reset();
@@ -143,6 +161,11 @@ export class Game {
     this.wind = new Wind();
     this.gameOverFired = false;
     this.survivorKills = null;
+    this.baseMode = baseMode;
+    this.playerBase = { x: this.player.x, y: this.player.y, hp: BASE.hp };
+    this.enemyBase = { x: this.enemy.x, y: this.enemy.y, hp: BASE.hp };
+    this.playerRespawnT = -1;
+    this.enemyRespawnT = -1;
     this.phase = 'battle';
   }
 
@@ -171,7 +194,11 @@ export class Game {
   }
 
   private get over(): boolean {
-    return this.phase === 'battle' && (!this.player.alive || !this.enemy.alive);
+    if (this.phase !== 'battle') return false;
+    // Destroy Base: a ship sinking is just an inconvenience — only a
+    // destroyed base actually ends the duel.
+    if (this.baseMode) return this.playerBase.hp <= 0 || this.enemyBase.hp <= 0;
+    return !this.player.alive || !this.enemy.alive;
   }
 
   // Canvas backing store is device pixels (high-DPI); logic works in CSS px.
@@ -218,7 +245,8 @@ export class Game {
 
     if (this.over && !this.gameOverFired) {
       this.gameOverFired = true;
-      this.onGameOver?.(this.enemy.alive === false);
+      const won = this.baseMode ? this.enemyBase.hp <= 0 : this.enemy.alive === false;
+      this.onGameOver?.(won);
     }
 
     const diff = DIFFICULTIES[this.difficulty];
@@ -277,6 +305,7 @@ export class Game {
     );
 
     this.updateRam(dt, w, h);
+    if (!this.over) this.updateBaseRespawns(dt);
 
     if (!this.over) {
       // Advance any manual reload in progress; refill the magazine when done.
@@ -316,13 +345,24 @@ export class Game {
 
     for (const ball of this.cannonballs) {
       ball.update(dt, w, h);
-      const target = ball.owner === this.player ? this.enemy : this.player;
+      const shooterIsPlayer = ball.owner === this.player;
+      const target = shooterIsPlayer ? this.enemy : this.player;
       if (target === this.player && this.player.depth > DIVE.immune) continue; // passes over
       if (!ball.spent && target.alive && target.containsPointWrapped(ball.x, ball.y, w, h)) {
         ball.spent = true;
         target.takeHit(ball.damage);
         this.explosions.push(new Explosion(ball.x, ball.y));
         this.onHit?.(target === this.player);
+      } else if (!ball.spent && this.baseMode) {
+        // Destroy Base: a shot that missed the (possibly respawning) enemy
+        // ship can still strike their base — never your own.
+        const enemyBase = shooterIsPlayer ? this.enemyBase : this.playerBase;
+        if (enemyBase.hp > 0 && Math.hypot(ball.x - enemyBase.x, ball.y - enemyBase.y) < BASE.r) {
+          ball.spent = true;
+          enemyBase.hp = Math.max(0, enemyBase.hp - ball.damage);
+          this.explosions.push(new Explosion(ball.x, ball.y));
+          this.onHit?.(!shooterIsPlayer);
+        }
       }
     }
     this.cannonballs = this.cannonballs.filter((b) => !b.spent);
@@ -388,6 +428,41 @@ export class Game {
     this.onHit?.(youWereHit);
   }
 
+  /** Destroy Base: a sunk hull waits BASE.respawnDelay, then returns to its
+   *  own base at full health — but only while that base still stands. */
+  private updateBaseRespawns(dt: number) {
+    if (!this.baseMode) return;
+    if (!this.player.alive && this.playerBase.hp > 0) {
+      this.playerRespawnT = this.playerRespawnT < 0 ? BASE.respawnDelay : this.playerRespawnT - dt;
+      if (this.playerRespawnT <= 0) this.respawnAtBase(this.player, this.playerBase);
+    }
+    if (!this.enemy.alive && this.enemyBase.hp > 0) {
+      this.enemyRespawnT = this.enemyRespawnT < 0 ? BASE.respawnDelay : this.enemyRespawnT - dt;
+      if (this.enemyRespawnT <= 0) this.respawnAtBase(this.enemy, this.enemyBase);
+    }
+  }
+
+  private respawnAtBase(ship: Ship, base: CampBase) {
+    ship.x = base.x;
+    ship.y = base.y;
+    ship.heading = Math.random() * Math.PI * 2;
+    ship.health = ship.maxHealth;
+    ship.sinkProgress = 0;
+    ship.shield = 0;
+    ship.depth = 0;
+    ship.boostFactor = 1;
+    ship.reload = 0;
+    ship.wake = [];
+    if (ship === this.player) {
+      this.playerRespawnT = -1;
+      this.ammo = this.ammoCap;
+      this.reloadTimer = 0;
+      this.diveCharge = DIVE.max;
+    } else {
+      this.enemyRespawnT = -1;
+    }
+  }
+
   /** Player submarine: a single straight-ahead bow torpedo. */
   private fireTorpedo() {
     const p = this.player;
@@ -433,6 +508,10 @@ export class Game {
     if (this.phase === 'idle') return;
 
     const ctx = this.ctx;
+    if (this.baseMode) {
+      this.drawBase(this.playerBase, PLAYER_COLOR, 'Your base');
+      this.drawBase(this.enemyBase, ENEMY_COLOR, "Enemy's base");
+    }
     for (const ball of this.cannonballs) ball.draw(ctx);
     this.player.drawWrapped(ctx, this.viewW, this.viewH);
     this.enemy.drawWrapped(ctx, this.viewW, this.viewH);
@@ -498,6 +577,55 @@ export class Game {
       }
     }
 
+  }
+
+  /** Destroy Base mode: a fortified structure at a combatant's home spot,
+   *  colored to match its owner, with a health bar and label — a grey ruin
+   *  once destroyed. */
+  private drawBase(base: CampBase, color: string, label: string) {
+    const ctx = this.ctx;
+    const alive = base.hp > 0;
+    const x = base.x;
+    const y = base.y;
+
+    ctx.save();
+    ctx.fillStyle = alive ? color : 'rgba(120, 120, 120, 0.55)';
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.55)';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    for (let k = 0; k <= 6; k++) {
+      const a = (k / 6) * Math.PI * 2 - Math.PI / 2;
+      const px = x + Math.cos(a) * BASE.r;
+      const py = y + Math.sin(a) * BASE.r;
+      if (k === 0) ctx.moveTo(px, py);
+      else ctx.lineTo(px, py);
+    }
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+
+    ctx.font = 'bold 22px system-ui, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = '#fff';
+    ctx.fillText(alive ? '🏰' : '💀', x, y + 1);
+
+    const barW = 64;
+    const barY = y - BASE.r - 13;
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.55)';
+    ctx.fillRect(x - barW / 2 - 1, barY - 1, barW + 2, 7);
+    const frac = Math.max(0, Math.min(1, base.hp / BASE.hp));
+    ctx.fillStyle = frac > 0.5 ? '#5bd15f' : frac > 0.25 ? '#e6b422' : '#e8503a';
+    ctx.fillRect(x - barW / 2, barY, barW * frac, 5);
+
+    ctx.font = 'bold 11px system-ui, sans-serif';
+    ctx.textBaseline = 'bottom';
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = 'rgba(0, 0, 0, 0.65)';
+    ctx.strokeText(label, x, barY - 3);
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
+    ctx.fillText(label, x, barY - 3);
+    ctx.restore();
   }
 
   private drawSea() {

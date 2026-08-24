@@ -34,7 +34,7 @@ import {
   type ShipSpawn,
   type ShipState,
 } from './net';
-import { DIVE, gunOffsets, muzzleReach, RAM, SAIL_TYPES, Ship, SHIP_TYPES, wrapDelta, YOU_COLOR, type ShipTypeName, type Turn } from './ship';
+import { BASE, DIVE, gunOffsets, muzzleReach, RAM, SAIL_TYPES, Ship, SHIP_TYPES, wrapDelta, YOU_COLOR, type ShipTypeName, type Turn } from './ship';
 import type { GameSounds } from './sounds';
 import { drawThreatArc, haptic, incomingThreats, TouchControls, touchActive, turnToward } from './touchui';
 import { Wind } from './wind';
@@ -400,8 +400,9 @@ export class MpSession {
   private scoreView: { score: number; kills: number }[] = []; // host + guest (leaderboard)
   private ramCd: number[] = []; // per-ship ram-damage cooldown (host)
   private spawnUntil: number[] = []; // per-ship spawn-invulnerability expiry (host)
-  private respawnAt: number[] = []; // clock time a sunk ship respawns (Leaderboard); Infinity = n/a
+  private respawnAt: number[] = []; // clock time a sunk ship respawns (Leaderboard/Destroy Base); Infinity = n/a
   private moveFreezeUntil: number[] = []; // clock until a (re)spawned ship may move/fire (host)
+  private baseHp: number[] = []; // Destroy Base mode: per-captain base HP (host-authoritative)
   private timeLeft = -1; // Leaderboard match seconds remaining (host computes, guest mirrors); -1 = untimed
   private diveCharge: number[] = []; // per-ship submarine dive charge (host)
   private guestCharge: number[] = []; // dive charge fractions mirrored from snapshots (guest)
@@ -825,6 +826,7 @@ export class MpSession {
     this.spawnUntil.push(this.clock + SPAWN_PROTECT);
     this.respawnAt.push(Infinity);
     this.moveFreezeUntil.push(this.clock + RESPAWN_FREEZE);
+    this.baseHp.push(BASE.hp);
     this.diveCharge.push(DIVE_MAX);
     const cap = SHIP_TYPES[spawn.type].guns * MAG_BROADSIDES;
     this.magCap.push(cap);
@@ -930,6 +932,7 @@ export class MpSession {
     this.spawnUntil = this.spawns.map(() => SPAWN_PROTECT); // clock starts at 0
     this.respawnAt = this.spawns.map(() => Infinity);
     this.moveFreezeUntil = this.spawns.map(() => 0);
+    this.baseHp = this.spawns.map(() => BASE.hp);
     this.timeLeft = this.mode === 'score' ? MATCH_DURATION : -1;
     this.diveCharge = this.spawns.map(() => DIVE_MAX);
     this.magCap = this.spawns.map((sp) => SHIP_TYPES[sp.type].guns * MAG_BROADSIDES);
@@ -1163,6 +1166,23 @@ export class MpSession {
           break;
         }
       }
+      // Destroy Base: a shot that missed every ship can still strike an
+      // opponent's base (never your own — bases only take enemy fire).
+      if (!ball.spent && this.mode === 'base') {
+        const ownerIdx = this.ships.indexOf(ball.owner);
+        for (let i = 0; i < this.baseHp.length; i++) {
+          if (i === ownerIdx || this.baseHp[i] <= 0) continue;
+          const dx = wrapDelta(ball.x - this.spawns[i].x, this.worldW);
+          const dy = wrapDelta(ball.y - this.spawns[i].y, this.worldH);
+          if (Math.hypot(dx, dy) >= BASE.r) continue;
+          ball.spent = true;
+          const before = this.baseHp[i];
+          this.baseHp[i] = Math.max(0, this.baseHp[i] - ball.damage);
+          if (ownerIdx >= 0) this.scores[ownerIdx].damage += before - this.baseHp[i];
+          this.pendingEvents.push({ e: 'hit', x: ball.x, y: ball.y, by: ownerIdx, on: -1 });
+          break;
+        }
+      }
       if (!ball.spent && islandHitsPoint(this.islands, ball.x, ball.y)) {
         ball.spent = true;
         this.pendingEvents.push({ e: 'splash', x: ball.x, y: ball.y });
@@ -1177,6 +1197,7 @@ export class MpSession {
     // immediately.
     this.timeLeft = this.mode === 'score' ? Math.max(0, MATCH_DURATION - this.clock) : -1;
     if (this.phase === 'battle' && this.mode === 'score') this.updateRespawns();
+    if (this.phase === 'battle' && this.mode === 'base') this.updateBaseRespawns();
 
     this.updateBuffView();
 
@@ -1197,10 +1218,17 @@ export class MpSession {
           (s, i) => s.alive || (!this.players[i].bot && this.players[i].connected),
         ).length;
         matchOver = this.clock >= MATCH_DURATION || (this.stormActive() && contenders <= 1);
-      } else {
+      } else if (this.mode === 'survival') {
         const alive = this.ships.filter((s) => s.alive).length;
         const humansAlive = this.players.some((p, i) => !p.bot && this.ships[i].alive);
         matchOver = alive <= 1 || !humansAlive;
+      } else {
+        // Destroy Base: a ship sinking doesn't eliminate anyone — only a
+        // destroyed base does. Ends when one base stands, or every human's
+        // base has fallen (nobody wants to spectate bots finishing it off).
+        const basesAlive = this.baseHp.filter((hp) => hp > 0).length;
+        const humanBaseAlive = this.players.some((p, i) => !p.bot && this.baseHp[i] > 0);
+        matchOver = basesAlive <= 1 || !humanBaseAlive;
       }
       if (matchOver && this.endTimer < 0) this.endTimer = END_DELAY;
       if (this.endTimer >= 0) {
@@ -1370,11 +1398,13 @@ export class MpSession {
     return true;
   }
 
-  // ── Respawns (host, Leaderboard) ──────────────────────────────────────────────
+  // ── Respawns (host, Leaderboard & Destroy Base) ─────────────────────────────
 
   /** True while ship `i` is in its post-(re)spawn hold and can't move or fire. */
   private moveFrozen(i: number): boolean {
-    return this.mode === 'score' && this.moveFreezeUntil[i] > this.clock;
+    return (
+      (this.mode === 'score' || this.mode === 'base') && this.moveFreezeUntil[i] > this.clock
+    );
   }
 
   /** A sunk ship stays down for DEATH_PAUSE, then returns to the middle of the
@@ -1392,9 +1422,29 @@ export class MpSession {
     }
   }
 
+  /** Destroy Base: a sunk ship stays down for BASE.respawnDelay, then returns
+   *  to its own base — but only while that base still stands; once it falls,
+   *  that captain is out for good (no more respawns). */
+  private updateBaseRespawns() {
+    for (let i = 0; i < this.ships.length; i++) {
+      if (this.ships[i].alive) continue;
+      if (!this.players[i].connected) continue;
+      if (this.baseHp[i] <= 0) continue; // base destroyed — permanently out
+      if (this.respawnAt[i] === Infinity) {
+        this.respawnAt[i] = this.clock + BASE.respawnDelay;
+      } else if (this.clock >= this.respawnAt[i]) {
+        this.respawn(i);
+      }
+    }
+  }
+
   private respawn(i: number) {
     const ship = this.ships[i];
-    const spot = this.pickRespawnSpot(ship.width);
+    // Destroy Base: always return home. Otherwise, a clear spot near the middle.
+    const spot =
+      this.mode === 'base'
+        ? { x: this.spawns[i].x, y: this.spawns[i].y }
+        : this.pickRespawnSpot(ship.width);
     ship.x = spot.x;
     ship.y = spot.y;
     ship.heading = this.pickClearHeading(spot.x, spot.y);
@@ -1476,8 +1526,11 @@ export class MpSession {
   /** Maelstrom strength for the current clock: 0 before it forms → 1 at full.
    *  Leaderboard holds the storm until the last STORM_WINDOW seconds, then
    *  ramps it to full right as the clock runs out. Survivor keeps its slow
-   *  build. */
+   *  build. Destroy Base skips it entirely — bases are fixed at the spawn
+   *  ring, and a forced pull to the center would fight the whole point of
+   *  defending (or besieging) a specific spot. */
   private whirlStrength(): number {
+    if (this.mode === 'base') return 0;
     if (this.mode === 'score') {
       const start = MATCH_DURATION - STORM_WINDOW;
       if (this.clock < start) return 0;
@@ -1635,13 +1688,15 @@ export class MpSession {
   /** Live standings. Leaderboard mode: weighted score. Survivor: alive ships
    *  outrank sunk ones, then longest time afloat. */
   getLeaderboard(): LeaderboardEntry[] {
+    // Destroy Base: "alive" means your base still stands, not that your ship
+    // happens to be afloat this instant — a ship mid-respawn isn't out.
     const rows = this.ships.map((s, i) => ({
       idx: i,
       name: this.spawns[i]?.name ?? '',
       color: this.spawns[i]?.color ?? '#fff',
       score: Math.round(this.scoreView[i]?.score ?? 0),
       kills: this.scoreView[i]?.kills ?? 0,
-      alive: s.alive,
+      alive: this.mode === 'base' ? (this.baseHp[i] ?? 0) > 0 : s.alive,
       you: i === this.you,
     }));
     if (this.mode === 'survival') {
@@ -1650,6 +1705,14 @@ export class MpSession {
           Number(b.alive) - Number(a.alive) ||
           b.score - a.score ||
           this.ships[b.idx].health - this.ships[a.idx].health,
+      );
+    }
+    if (this.mode === 'base') {
+      return rows.sort(
+        (a, b) =>
+          Number(b.alive) - Number(a.alive) ||
+          (this.baseHp[b.idx] ?? 0) - (this.baseHp[a.idx] ?? 0) ||
+          b.score - a.score,
       );
     }
     return rows.sort((a, b) => b.score - a.score);
@@ -1675,6 +1738,7 @@ export class MpSession {
         kills: this.scoreView[i]?.kills ?? 0,
         ammo: this.mag[i] ?? 0,
         rl: this.reloadT[i] > 0 ? this.reloadT[i] / MAG_RELOAD : 0,
+        baseHp: this.baseHp[i] ?? 0,
       })),
       balls: this.balls.map((b) => ({ x: b.x, y: b.y, vx: b.vx, vy: b.vy, tp: b.torpedo })),
       wind: this.wind.direction,
@@ -1743,6 +1807,7 @@ export class MpSession {
           kills: 0,
           ammo: SHIP_TYPES[sp.type].guns * MAG_BROADSIDES,
           rl: 0,
+          baseHp: BASE.hp,
         }));
         this.buffView = msg.ships.map(() => ({ shield: 0, spd: false, dbl: false, mg: false, inv: true }));
         this.scoreView = msg.ships.map(() => ({ score: 0, kills: 0 }));
@@ -1785,6 +1850,7 @@ export class MpSession {
             kills: 0,
             ammo: SHIP_TYPES[sp.type].guns * MAG_BROADSIDES,
             rl: 0,
+            baseHp: BASE.hp,
           });
           this.buffView.push({ shield: 0, spd: false, dbl: false, mg: false, inv: true });
           this.scoreView.push({ score: 0, kills: 0 });
@@ -2118,6 +2184,7 @@ export class MpSession {
 
     for (const island of this.islands) drawIsland(ctx, island);
 
+    if (this.mode === 'base') this.drawBases();
     this.drawPickups();
 
     if (this.isHost) {
@@ -2212,6 +2279,60 @@ export class MpSession {
     ctx.stroke();
 
     ctx.restore();
+  }
+
+  /** Destroy Base mode: each captain's fortified base, colored to match its
+   *  crew, with a health bar and name tag — a grey ruin once destroyed. */
+  private drawBases() {
+    const ctx = this.ctx;
+    for (let i = 0; i < this.spawns.length; i++) {
+      const sp = this.spawns[i];
+      if (!sp) continue;
+      const hp = this.isHost ? (this.baseHp[i] ?? 0) : (this.targets[i]?.baseHp ?? 0);
+      const alive = hp > 0;
+      const x = sp.x;
+      const y = sp.y;
+
+      ctx.save();
+      ctx.fillStyle = alive ? sp.color : 'rgba(120, 120, 120, 0.55)';
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.55)';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      for (let k = 0; k <= 6; k++) {
+        const a = (k / 6) * Math.PI * 2 - Math.PI / 2;
+        const px = x + Math.cos(a) * BASE.r;
+        const py = y + Math.sin(a) * BASE.r;
+        if (k === 0) ctx.moveTo(px, py);
+        else ctx.lineTo(px, py);
+      }
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+
+      ctx.font = 'bold 22px system-ui, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillStyle = '#fff';
+      ctx.fillText(alive ? '🏰' : '💀', x, y + 1);
+
+      const barW = 64;
+      const barY = y - BASE.r - 13;
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.55)';
+      ctx.fillRect(x - barW / 2 - 1, barY - 1, barW + 2, 7);
+      const frac = Math.max(0, Math.min(1, hp / BASE.hp));
+      ctx.fillStyle = frac > 0.5 ? '#5bd15f' : frac > 0.25 ? '#e6b422' : '#e8503a';
+      ctx.fillRect(x - barW / 2, barY, barW * frac, 5);
+
+      ctx.font = 'bold 11px system-ui, sans-serif';
+      ctx.textBaseline = 'bottom';
+      const label = `${sp.name}'s base`;
+      ctx.lineWidth = 3;
+      ctx.strokeStyle = 'rgba(0, 0, 0, 0.65)';
+      ctx.strokeText(label, x, barY - 3);
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
+      ctx.fillText(label, x, barY - 3);
+      ctx.restore();
+    }
   }
 
   private drawPickups() {

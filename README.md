@@ -23,10 +23,12 @@ earlier answer and ← Back (or Esc) steps back one.
 A fourth choice, **🎲 I'm Feeling Lucky**, skips every question: it rolls a
 whole Bots Arena — win condition, hull, fleet size — and sails on the spot.
 
-- **Practice** — a 1v1 duel or endless Survivor waves against the bot AI, with
-  your hull, the enemy hull and the difficulty up to you.
+- **Practice** — a 1v1 duel, endless Survivor waves, or a Destroy Base siege
+  against the bot AI, with your hull, the enemy hull and the difficulty up to
+  you.
 - **Bots Arena** — a free-for-all against **5, 10, or 15 bots**. Pick the win
-  condition and your ship and it sails immediately: no room code, no lobby.
+  condition (Leaderboard, Survivor, or Destroy Base) and your ship and it
+  sails immediately: no room code, no lobby.
 - **Play with Friends** — see below.
 
 ## Multiplayer
@@ -97,7 +99,7 @@ starts the battle once 2–11 captains are in.
   an island blocks the shot, and when wounded they break off and run for
   cover, favoring fast points of sail and keeping islands between themselves
   and the threat.
-- **Two battle modes** (host picks in the lobby): **Leaderboard** is a
+- **Three battle modes** (host picks in the lobby, or up front in Bots Arena): **Leaderboard** is a
   **90-second deathmatch with respawns** — when you sink you drop out for two
   seconds, then reappear in the middle of the map with a fresh spawn shield and
   a brief hold before you can move, so you sink as many as you can before the
@@ -109,11 +111,20 @@ starts the battle once 2–11 captains are in.
   afloat counts, there are **no respawns**, and the last one standing wins —
   bots switch to a cautious, evasive doctrine (no hunting, no ramming) and fight
   only in self-defense; it ends when one ship is left afloat or **every human
-  captain is dead** (you never spectate bots finishing each other off). A
-  collapsible standings panel sits top-right (collapsed to a pill showing the
+  captain is dead** (you never spectate bots finishing each other off).
+  **Destroy Base** turns sinking into an inconvenience, not an ending: every
+  captain has a fortified **base at their spawn point** with **300 HP** (100×
+  a small hull), and going down just sends you back to it after a
+  **10-second wait** — only a **destroyed base** (aim your broadsides at an
+  enemy's, never your own) knocks a captain out for good. There's no
+  maelstrom in this mode — bases are fixed, so nothing forces a convergence.
+  It ends when one base stands or every human's base has fallen. Bots fight
+  ships as usual but don't deliberately hunt a base — cracking one open is
+  mostly on you (a base-mode match with only bots may never resolve on its
+  own). A collapsible standings panel sits top-right (collapsed to a pill showing the
   current leader; click to expand the full ranked board), and the **final
   standings are shown on the end screen**. The captain with the highest score
-  when the match ends rules the seas.
+  (Leaderboard/Destroy Base) or the survivor (Survivor) rules the seas.
 - After a battle the host can call a **rematch** (fresh islands) or send
   everyone **back to the lobby**. If a captain drops mid-fight, their ship
   strikes its colors and sinks.
