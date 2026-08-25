@@ -39,6 +39,9 @@
     <!-- How to play -->
     <button id="help-toggle" type="button" title="How to play">❓</button>
 
+    <!-- Settings (pace) -->
+    <button id="settings-toggle" type="button" title="Settings">⚙</button>
+
     <!-- Rules / mechanics reference -->
     <div id="rules-overlay" class="hidden">
       <div class="modal rules-modal">
@@ -189,6 +192,27 @@
 
     <!-- Full-screen muster shown before the battle starts. One question per
          step; main.ts drives which panel is visible. -->
+    <!-- Settings: pace, and anything else that is a personal preference -->
+    <div id="settings-overlay" class="hidden">
+      <div class="modal settings-modal">
+        <div class="modal-scroll settings-content">
+          <h2>Settings</h2>
+
+          <div class="section-label">Game speed</div>
+          <div id="settings-speed"></div>
+          <p class="settings-note">
+            Sets the pace of the whole battle — ships, shots, reloads and timers all scale
+            together, so nothing gets easier relative to anything else. What changes is how much
+            time you get to read the water. Applies to Practice; in a room the host sets the pace
+            for every captain.
+          </p>
+        </div>
+        <div class="modal-footer">
+          <button id="settings-close">Close</button>
+        </div>
+      </div>
+    </div>
+
     <div id="menu-overlay">
       <div class="modal">
         <!-- Back / breadcrumbs / step counter — hidden on the title screen -->
@@ -284,6 +308,9 @@
 
           <div class="section-label">Friendly fire — team mode only</div>
           <div class="card-row" id="lobby-ff-cards"></div>
+
+          <div class="section-label">Game speed — host picks</div>
+          <div id="lobby-speed-row"></div>
 
           <div class="section-label">Ships</div>
           <div id="lobby-players" class="lobby-players"></div>

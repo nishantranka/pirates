@@ -16,6 +16,28 @@ try {
   /* localStorage may be unavailable (e.g. private mode) */
 }
 
+// Battle pace, remembered across sessions. 1 = normal; the slider spans a
+// half-speed crawl to half again as fast. Practice reads this directly; a
+// hosted room seeds its own pace from it and the host can override per room.
+const SPEED_MIN = 0.5;
+const SPEED_MAX = 1.5;
+const SPEED_STEP = 0.05;
+const SPEED_KEY = 'pirates-gamespeed';
+
+function clampSpeed(v: number): number {
+  if (!Number.isFinite(v)) return 1;
+  const snapped = Math.round(v / SPEED_STEP) * SPEED_STEP;
+  return Math.min(SPEED_MAX, Math.max(SPEED_MIN, Math.round(snapped * 100) / 100));
+}
+
+let gameSpeedPref = 1;
+try {
+  const saved = localStorage.getItem(SPEED_KEY);
+  if (saved !== null) gameSpeedPref = clampSpeed(parseFloat(saved));
+} catch {
+  /* localStorage may be unavailable (e.g. private mode) */
+}
+
 // All cues are synthesized (see sounds.ts) — the old mp3 clips are gone.
 const sounds = createSounds(() => muted);
 
@@ -49,6 +71,7 @@ game.onHit = (youWereHit: boolean) => {
   }
 };
 game.onPickup = () => sounds.pickup();
+game.gameSpeed = gameSpeedPref;
 game.start();
 // Dev-only hook so E2E tests can observe practice mode; stripped in prod.
 if (import.meta.env.DEV) (window as unknown as { __game: Game }).__game = game;
@@ -119,6 +142,74 @@ function selectCard(row: Element, key: string) {
 }
 
 const setSailBtn = document.getElementById('set-sail') as HTMLButtonElement;
+
+// ── Pace slider ───────────────────────────────────────────────────────────────
+// One widget, two mounts: the settings modal (your own preference) and the
+// lobby row (the host's pick, shown read-only to guests). Returns a repaint
+// you call with the current value and whether this client may change it.
+
+function buildSpeedSlider(
+  mount: HTMLElement,
+  label: string,
+  onChange: (speed: number) => void,
+): (speed: number, editable: boolean) => void {
+  const wrap = document.createElement('div');
+  wrap.className = 'speed-slider';
+  wrap.innerHTML =
+    `<div class="speed-head"><span>${label}</span><b class="speed-value"></b></div>` +
+    `<div class="speed-scale"><span>slower</span><span>normal</span><span>faster</span></div>`;
+  const slider = document.createElement('input');
+  slider.type = 'range';
+  slider.min = String(SPEED_MIN);
+  slider.max = String(SPEED_MAX);
+  slider.step = String(SPEED_STEP);
+  wrap.insertBefore(slider, wrap.lastElementChild);
+  mount.appendChild(wrap);
+
+  const value = wrap.querySelector('.speed-value') as HTMLElement;
+  const paint = (speed: number, editable: boolean) => {
+    slider.value = String(speed);
+    slider.disabled = !editable;
+    wrap.classList.toggle('locked', !editable);
+    value.textContent = Math.abs(speed - 1) < 1e-9 ? 'normal' : `${speed.toFixed(2)}×`;
+  };
+  slider.addEventListener('input', () => {
+    const v = clampSpeed(parseFloat(slider.value));
+    onChange(v);
+    paint(v, true);
+  });
+  // Arrow keys nudging the slider must not also steer a ship.
+  slider.addEventListener('keydown', (e) => e.stopPropagation());
+  return paint;
+}
+
+const settingsOverlay = document.getElementById('settings-overlay')!;
+const paintSettingsSpeed = buildSpeedSlider(
+  document.getElementById('settings-speed')!,
+  // The section label above already names it; the head row carries the value.
+  '',
+  (speed) => {
+    gameSpeedPref = speed;
+    game.gameSpeed = speed;
+    try {
+      localStorage.setItem(SPEED_KEY, String(speed));
+    } catch {
+      /* localStorage may be unavailable (e.g. private mode) */
+    }
+  },
+);
+paintSettingsSpeed(gameSpeedPref, true);
+
+document.getElementById('settings-toggle')!.addEventListener('click', () => {
+  paintSettingsSpeed(gameSpeedPref, true);
+  settingsOverlay.classList.remove('hidden');
+});
+document.getElementById('settings-close')!.addEventListener('click', () => {
+  settingsOverlay.classList.add('hidden');
+});
+settingsOverlay.addEventListener('click', (e) => {
+  if (e.target === settingsOverlay) settingsOverlay.classList.add('hidden');
+});
 
 // ── The muster: one question per screen ───────────────────────────────────────
 // Each step owns a panel (#step-<id>) and, when it ends its path, the footer
@@ -558,6 +649,11 @@ const ffToggleOptions: Array<{ key: 'off' | 'on'; label: string; stat: string }>
   { key: 'off', label: 'Off', stat: "teammates can't hurt you" },
   { key: 'on', label: 'On', stat: 'watch your broadsides' },
 ];
+const lobbySpeedRow = document.getElementById('lobby-speed-row')!;
+const paintLobbySpeed = buildSpeedSlider(lobbySpeedRow, '', (speed) =>
+  mp?.setGameSpeed(speed),
+);
+
 const lobbyFfRow = document.getElementById('lobby-ff-cards')!;
 ffToggleOptions.forEach(({ key, label, stat }) => {
   const card = makeCard(label, stat, key);
@@ -586,6 +682,8 @@ function renderLobby(players: LobbyPlayerInfo[], you: number, canStart: boolean,
   selectCard(lobbyFfRow, (mp?.friendlyFireOn ?? false) ? 'on' : 'off');
   // Friendly fire only means anything with Team Mode on.
   lobbyFfRow.querySelectorAll('.card').forEach((c) => c.classList.toggle('disabled', !teamsOn));
+  // Everyone sees the room's pace; only the host can move it.
+  paintLobbySpeed(mp?.gameSpeedValue ?? 1, mp?.isHosting ?? false);
   lobbyPlayersEl.innerHTML = '';
   players.forEach((p, i) => {
     const row = document.createElement('div');
@@ -812,6 +910,7 @@ function createRoom() {
   mpStatus.textContent = 'Opening room…';
   setSailBtn.disabled = true;
   mp = MpSession.host(shipName(), ctx, input, mpCallbacks(), sounds);
+  mp.setGameSpeed(gameSpeedPref); // your saved pace is the room's starting point
   // Dev-only hook so E2E tests can observe the session; stripped in prod.
   if (import.meta.env.DEV) (window as unknown as { __mp: MpSession }).__mp = mp;
 }
@@ -836,6 +935,7 @@ function startBotsArena() {
   mpStatus.textContent = '';
   setSailBtn.disabled = true;
   mp = MpSession.host(shipName(), ctx, input, mpCallbacks(), sounds);
+  mp.setGameSpeed(gameSpeedPref); // your saved pace is the room's starting point
   if (import.meta.env.DEV) (window as unknown as { __mp: MpSession }).__mp = mp;
 }
 
