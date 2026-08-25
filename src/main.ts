@@ -1,3 +1,4 @@
+import { devTune } from './devtune';
 import { Game, DIFFICULTIES, type DifficultyName } from './game';
 import { Input } from './input';
 import { MpSession, MAX_PLAYERS, crewColor, type LeaderboardEntry } from './multiplayer';
@@ -75,6 +76,8 @@ game.gameSpeed = gameSpeedPref;
 game.start();
 // Dev-only hook so E2E tests can observe practice mode; stripped in prod.
 if (import.meta.env.DEV) (window as unknown as { __game: Game }).__game = game;
+// Dev-only balance lever with no UI (see devtune.ts); set it from the console.
+if (import.meta.env.DEV) (window as unknown as { __devTune: typeof devTune }).__devTune = devTune;
 
 window.addEventListener('resize', resize);
 resize();

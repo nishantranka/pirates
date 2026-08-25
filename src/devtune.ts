@@ -1,13 +1,14 @@
 /**
- * DEV-ONLY tuning knob, driven by the panel main.ts mounts under
- * `import.meta.env.DEV`. Nothing in the shipped game writes it — the panel is
- * the only writer and it never mounts in a production build, so the value
- * stays pinned at 1 and the read in Ship.update is a no-op multiply.
+ * DEV-ONLY tuning knob, exposed as `window.__devTune` in development builds
+ * (see main.ts) and never written by the shipped game — so in production the
+ * value stays pinned at 1 and the read in Ship.update is a no-op multiply.
  *
- * Game *pace* is a real player setting now (see the settings modal); this is
- * the other lever, kept for design work only. It scales hull movement while
- * leaving shot flight and reload cadence at full rate, so it re-balances the
- * game rather than just slowing it down — a design call, not a preference.
+ * Game *pace* is a real player setting now (the settings modal). This is the
+ * other lever, kept for design work: it scales hull movement while leaving
+ * shot flight and reload cadence at full rate, so unlike pace it genuinely
+ * re-balances the game — you cover less water per reload, which makes lining
+ * up a broadside easier. That's a design call to make deliberately, not
+ * something to hand a player, which is why it has no UI.
  */
 export const devTune = {
   shipSpeed: 1,
