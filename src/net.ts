@@ -92,7 +92,15 @@ export type C2HMsg =
 /** Host → guest. */
 export type H2CMsg =
   | { t: 'reject'; reason: string }
-  | { t: 'lobby'; players: LobbyPlayerInfo[]; you: number; mode: MpMode; teams: boolean; friendlyFire: boolean }
+  | {
+      t: 'lobby';
+      players: LobbyPlayerInfo[];
+      you: number;
+      mode: MpMode;
+      teams: boolean;
+      friendlyFire: boolean;
+      gameSpeed: number;
+    }
   // w/h: arena dimensions for this battle (the host shapes the sea to its own
   // window; guests mirror so everyone plays the exact same world).
   | {
@@ -105,6 +113,7 @@ export type H2CMsg =
       h: number;
       teams: boolean;
       friendlyFire: boolean;
+      gameSpeed: number;
     }
   // Mid-battle roster growth: a captain joined late; existing clients extend
   // their ship lists in place (indices never shrink or reorder mid-round).

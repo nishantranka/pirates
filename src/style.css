@@ -459,6 +459,54 @@ canvas {
   background: rgba(10, 30, 55, 0.95);
 }
 
+/* ── Settings button (top-left, under the help button) ────────────────────── */
+
+#settings-toggle {
+  position: absolute;
+  top: 104px;
+  left: 12px;
+  z-index: 20;
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  background: rgba(10, 30, 55, 0.72);
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  color: #fff;
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+#settings-toggle:active {
+  background: rgba(10, 30, 55, 0.95);
+}
+
+#settings-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.55);
+}
+
+.settings-modal {
+  max-width: 520px;
+}
+
+.settings-content {
+  padding: 8px 32px 20px;
+}
+
+.settings-note {
+  font-size: 13px;
+  line-height: 1.5;
+  color: rgba(255, 255, 255, 0.62);
+  margin: 14px 0 0;
+}
+
 #rules-overlay {
   position: absolute;
   inset: 0;
@@ -1013,4 +1061,53 @@ canvas {
   background: rgba(255, 255, 255, 0.15);
   color: #fff;
   border: 1px solid rgba(255, 255, 255, 0.3);
+}
+
+/* ── Pace slider ──────────────────────────────────────────────────────────────
+   Shared by the settings modal (your own preference) and the lobby row (the
+   host's pick for the room, read-only for everyone else). */
+
+.speed-slider {
+  display: block;
+}
+
+.speed-slider .speed-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 6px;
+}
+
+.speed-slider .speed-value {
+  font-variant-numeric: tabular-nums;
+  color: #ffd75e;
+  font-size: 15px;
+}
+
+.speed-slider input[type='range'] {
+  width: 100%;
+  margin: 0;
+  accent-color: #ffd75e;
+  cursor: pointer;
+}
+
+.speed-slider .speed-scale {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  color: rgba(255, 255, 255, 0.4);
+  margin-top: 4px;
+}
+
+/* Guests see the host's pace but cannot move it — same treatment the
+   friendly-fire row gets when Team Mode is off. */
+.speed-slider.locked {
+  opacity: 0.55;
+}
+
+.speed-slider.locked input[type='range'] {
+  pointer-events: none;
+  cursor: not-allowed;
 }

@@ -476,6 +476,10 @@ export class MpSession {
   private mode: MpMode = 'score'; // win condition (host picks in the lobby, guest mirrors)
   private teamsEnabled = false; // Team Mode toggle (host picks in the lobby, guest mirrors)
   private friendlyFire = false; // only meaningful with teamsEnabled (host picks, guest mirrors)
+  // Pace multiplier for the battle. Host-picked and broadcast: guests render
+  // interpolated host snapshots, so a guest scaling its own clock would only
+  // desync how the game feels. Applied to hostUpdate alone (see frame).
+  private gameSpeed = 1;
   private wind = new Wind();
   private explosions: Explosion[] = [];
   private splashes: Splash[] = [];
@@ -710,6 +714,24 @@ export class MpSession {
     if (!this.isHost || this.phase !== 'lobby') return;
     this.friendlyFire = enabled;
     this.pushLobby();
+  }
+
+  /** Host only: the pace every captain in this room plays at. */
+  setGameSpeed(speed: number) {
+    if (!this.isHost || this.phase !== 'lobby') return;
+    this.gameSpeed = speed;
+    this.pushLobby();
+  }
+
+  /** For UI copy. */
+  get gameSpeedValue(): number {
+    return this.gameSpeed;
+  }
+
+  /** Whether this client is the one simulating (the lobby locks its host-only
+   *  controls for everyone else). */
+  get isHosting(): boolean {
+    return this.isHost;
   }
 
   /** For UI copy. */
@@ -948,6 +970,7 @@ export class MpSession {
       h: this.worldH,
       teams: this.teamsEnabled,
       friendlyFire: this.friendlyFire,
+      gameSpeed: this.gameSpeed,
     } satisfies H2CMsg);
   }
 
@@ -983,6 +1006,7 @@ export class MpSession {
           mode: this.mode,
           teams: this.teamsEnabled,
           friendlyFire: this.friendlyFire,
+          gameSpeed: this.gameSpeed,
         } satisfies H2CMsg);
     });
     this.cb.onLobby(info, 0, this.canStart(), this.mode);
@@ -1102,6 +1126,7 @@ export class MpSession {
           h: this.worldH,
           teams: this.teamsEnabled,
           friendlyFire: this.friendlyFire,
+          gameSpeed: this.gameSpeed,
         } satisfies H2CMsg);
       }
     });
@@ -1892,6 +1917,7 @@ export class MpSession {
         this.mode = msg.mode;
         this.teamsEnabled = msg.teams;
         this.friendlyFire = msg.friendlyFire;
+        this.gameSpeed = msg.gameSpeed;
         this.cb.onLobby(msg.players, msg.you, false, msg.mode);
         break;
 
@@ -1911,6 +1937,7 @@ export class MpSession {
         this.mode = msg.mode;
         this.teamsEnabled = msg.teams;
         this.friendlyFire = msg.friendlyFire;
+        this.gameSpeed = msg.gameSpeed;
         this.ships = msg.ships.map((sp) => {
           const s = new Ship(sp.x, sp.y, sp.heading, sp.color, sp.type);
           s.team = sp.team;
@@ -2096,8 +2123,9 @@ export class MpSession {
       this.scoreView[i] = { score: t.score, kills: t.kills };
     });
 
-    this.driftWaves(dt);
-    this.tickEffects(dt);
+    // Cosmetic only, so these follow the pace the snapshots describe.
+    this.driftWaves(dt * this.gameSpeed);
+    this.tickEffects(dt * this.gameSpeed);
   }
 
   // ── Shared loop & effects ───────────────────────────────────────────────────
@@ -2117,7 +2145,10 @@ export class MpSession {
     if (!this.active || !this.looping) return;
     const dt = Math.min((now - this.lastTime) / 1000, MAX_DT);
     this.lastTime = now;
-    if (this.isHost) this.hostUpdate(dt);
+    // Only the authoritative sim scales. A guest keeps real dt for snapshot
+    // smoothing and input cadence — the positions it receives already carry
+    // the host's pacing, so scaling again would just make it lag its targets.
+    if (this.isHost) this.hostUpdate(dt * this.gameSpeed);
     else this.guestUpdate(dt);
     this.input.clearPressed(); // edge keys (R) are per-frame — without this they latch forever
     this.render();

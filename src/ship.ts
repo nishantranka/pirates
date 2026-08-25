@@ -1,3 +1,5 @@
+import { devTune } from './devtune';
+
 export type Turn = -1 | 0 | 1;
 
 export interface ShipStats {
@@ -161,7 +163,7 @@ export class Ship {
     this.brakeFactor = braking
       ? Math.max(0, this.brakeFactor - step)
       : Math.min(1, this.brakeFactor + step);
-    const v = this.speed * speedFactor * this.boostFactor * this.brakeFactor;
+    const v = this.speed * devTune.shipSpeed * speedFactor * this.boostFactor * this.brakeFactor;
     this.x += Math.cos(this.heading) * v * dt;
     this.y += Math.sin(this.heading) * v * dt;
 

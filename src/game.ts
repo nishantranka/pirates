@@ -152,6 +152,11 @@ export class Game {
   survivorKills: number | null = null;
   /** While true another renderer (multiplayer) owns the canvas; this loop idles. */
   suspended = false;
+  /** Pace multiplier for the whole practice sim — ships, shots, reloads, buff
+   *  timers all scale together, so every in-game ratio is preserved and only
+   *  the wall-clock time you get to react changes. Set from the saved player
+   *  setting in main.ts; multiplayer has its own host-picked equivalent. */
+  gameSpeed = 1;
 
   // Actual touch use, not capability — a touchscreen laptop on the keyboard
   // gets desktop rules. Seeded from any touch earlier this session, upgraded
@@ -289,7 +294,8 @@ export class Game {
   }
 
   private frame = (now: number) => {
-    const dt = Math.min((now - this.lastTime) / 1000, MAX_DT);
+    // Scaled after the clamp, so a frame hitch stays clamped and then slows.
+    const dt = Math.min((now - this.lastTime) / 1000, MAX_DT) * this.gameSpeed;
     this.lastTime = now;
     if (!this.suspended) {
       this.update(dt);
