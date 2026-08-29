@@ -26,6 +26,7 @@ const MAG_RELOAD = 2; // s to reload and refill the magazine
 // same pickup types and effects, just two hulls and no host/guest sync — a
 // buff is a plain per-ship countdown timer instead of a clock-timestamp.
 const MG_RELOAD = 0.16; // machine-gun cadence
+const MG_RELOAD_SUB = 0.35; // rapid-fire cadence for torpedoes (slower — a torpedo hits much harder than a cannonball)
 const MG_DURATION = 5; // s of continuous fire
 const DOUBLE_DURATION = 10; // s of firing both sides at once
 const SPEED_DURATION = 8; // s of double speed
@@ -476,8 +477,12 @@ export class Game {
   }
 
   /** Player submarine: a single straight-ahead bow torpedo. Range doesn't
-   *  apply — torpedoes already run the length of the map — but Damage does. */
-  private fireTorpedo() {
+   *  apply — torpedoes already run the length of the map — but Damage does.
+   *  `reload` is 0 for a normal magazine-gated shot (the magazine itself
+   *  gates the next one) and MG_RELOAD_SUB during Rapid Fire, which bypasses
+   *  the magazine entirely and so needs its own cadence to not fire every
+   *  single frame. */
+  private fireTorpedo(reload: number) {
     const p = this.player;
     this.cannonballs.push(
       new Cannonball(
@@ -490,7 +495,7 @@ export class Game {
         p.damageFactor,
       ),
     );
-    p.reload = 0; // no cadence — the magazine gates firing now
+    p.reload = reload;
   }
 
   /** Fire one broadside off the given side, setting the reload timer. */
@@ -537,7 +542,7 @@ export class Game {
 
     if (b.mgT > 0) {
       if (p.reload <= 0) {
-        if (p.type === 'submarine') this.fireTorpedo();
+        if (p.type === 'submarine') this.fireTorpedo(MG_RELOAD_SUB);
         else this.fireBroadside(p, MG_RELOAD);
         this.onCannonFire?.();
       }
@@ -557,7 +562,7 @@ export class Game {
       if (!firePressed) return;
       b.mgArmed = false;
       b.mgT = MG_DURATION;
-      if (p.type === 'submarine') this.fireTorpedo();
+      if (p.type === 'submarine') this.fireTorpedo(MG_RELOAD_SUB);
       else this.fireBroadside(p, MG_RELOAD);
       this.onCannonFire?.();
       haptic(15);
@@ -568,7 +573,7 @@ export class Game {
     // so taps can be as fast as you like. Submarines can launch torpedoes
     // surfaced or submerged.
     if (!firePressed || this.reloadTimer > 0 || this.ammo < p.guns) return;
-    if (p.type === 'submarine') this.fireTorpedo();
+    if (p.type === 'submarine') this.fireTorpedo(0);
     else if (b.doubleT > 0) this.fireBoth(p, 0);
     else this.fireBroadside(p, 0);
     this.ammo -= p.guns;
