@@ -27,6 +27,7 @@ import {
   type C2HMsg,
   type GameEvent,
   type H2CMsg,
+  type IcebergData,
   type LobbyPlayerInfo,
   type MpMode,
   type PeerHandle,
@@ -259,6 +260,56 @@ function spawnRing(worldW: number, worldH: number): Array<{ x: number; y: number
   });
 }
 
+// ── Icebergs ─────────────────────────────────────────────────────────────────
+// Slow-drifting hazards that ride the wind, unlike static islands. A ship
+// that touches one is destroyed outright, same as running aground.
+const ICEBERG_MIN = 3;
+const ICEBERG_MAX = 5; // 3–5 per battle
+const ICEBERG_R_MIN = 30;
+const ICEBERG_R_MAX = 55;
+const ICEBERG_SPEED = 22; // px/s — well under any hull's speed, a hazard to route around, not outrun
+const ICEBERG_CLEARANCE = 180; // open water guaranteed around each spawn point
+const ICEBERG_JAG_POINTS = 11; // outline vertices — odd count reads less like a regular polygon
+
+/** A jagged ice-blue silhouette, fixed at spawn — only x/y change as it drifts. */
+function icebergOutline(): Array<{ a: number; d: number }> {
+  const points: Array<{ a: number; d: number }> = [];
+  for (let i = 0; i < ICEBERG_JAG_POINTS; i++) {
+    const a = (i / ICEBERG_JAG_POINTS) * Math.PI * 2;
+    points.push({ a, d: 0.65 + Math.random() * 0.35 });
+  }
+  return points;
+}
+
+/** Icebergs spawn clear of islands, other icebergs, and every crew's spawn
+ *  point, then drift with the wind for the rest of the battle. */
+function generateIcebergs(
+  worldW: number,
+  worldH: number,
+  spawns: Array<{ x: number; y: number }>,
+  islands: IslandData[],
+): IcebergData[] {
+  const target = ICEBERG_MIN + Math.floor(Math.random() * (ICEBERG_MAX - ICEBERG_MIN + 1));
+  const icebergs: IcebergData[] = [];
+  let attempts = 0;
+  while (icebergs.length < target && attempts < 400) {
+    attempts++;
+    const r = ICEBERG_R_MIN + Math.random() * (ICEBERG_R_MAX - ICEBERG_R_MIN);
+    const x = r + 60 + Math.random() * (worldW - 2 * (r + 60));
+    const y = r + 60 + Math.random() * (worldH - 2 * (r + 60));
+    if (spawns.some((s) => Math.hypot(x - s.x, y - s.y) < r + ICEBERG_CLEARANCE)) continue;
+    if (islands.some((isl) => isl.circles.some((c) => Math.hypot(x - c.x, y - c.y) < r + c.r + 60))) continue;
+    if (icebergs.some((b) => Math.hypot(x - b.x, y - b.y) < r + b.r + 60)) continue;
+    icebergs.push({ x, y, r, points: icebergOutline() });
+  }
+  return icebergs;
+}
+
+/** Does a point (e.g. a cannonball) sit on an iceberg? Shots splash off the ice. */
+function icebergHitsPoint(icebergs: IcebergData[], x: number, y: number): boolean {
+  return icebergs.some((b) => Math.hypot(x - b.x, y - b.y) <= b.r);
+}
+
 // ── Team Mode ────────────────────────────────────────────────────────────────
 export const TEAM_COLORS: Record<Team, string> = {
   blue: '#3f8ee8',
@@ -450,6 +501,7 @@ export class MpSession {
   // Shared battle state (host simulates; guest mirrors)
   private you = 0;
   private islands: IslandData[] = [];
+  private icebergs: IcebergData[] = []; // shape fixed at spawn; x/y drift with the wind
   private spawns: ShipSpawn[] = [];
   private ships: Ship[] = [];
   private clock = 0; // seconds since the round began (drives buff timers)
@@ -941,6 +993,7 @@ export class MpSession {
     conn.send({
       t: 'start',
       islands: this.islands,
+      icebergs: this.icebergs,
       ships: this.spawns,
       you: i,
       mode: this.mode,
@@ -1029,6 +1082,7 @@ export class MpSession {
       };
     });
     this.islands = generateIslands(this.worldW, this.worldH, spots.slice(0, this.players.length));
+    this.icebergs = generateIcebergs(this.worldW, this.worldH, spots.slice(0, this.players.length), this.islands);
     this.ships = this.spawns.map((sp) => new Ship(sp.x, sp.y, sp.heading, sp.color, sp.type));
     this.ships.forEach((ship, i) => (ship.team = this.spawns[i].team));
     // Your own hull is always pink — except in Team Mode, where hull color
@@ -1095,6 +1149,7 @@ export class MpSession {
         p.conn.send({
           t: 'start',
           islands: this.islands,
+          icebergs: this.icebergs,
           ships: this.spawns,
           you: i,
           mode: this.mode,
@@ -1208,11 +1263,26 @@ export class MpSession {
         while (ship.alive) ship.takeHit();
         this.pendingEvents.push({ e: 'hit', x: ship.x, y: ship.y, by: -1, on: i });
       }
+      // Icebergs are just as lethal to the touch — unlike islands they drift,
+      // so this has to check the ship's actual (wrap-aware) position every
+      // tick rather than only after a move the current tried to make.
+      if (ship.alive && this.spawnUntil[i] <= this.clock) {
+        for (const berg of this.icebergs) {
+          const dx = wrapDelta(ship.x - berg.x, this.worldW);
+          const dy = wrapDelta(ship.y - berg.y, this.worldH);
+          if (Math.hypot(dx, dy) < berg.r + ship.width * 0.55) {
+            while (ship.alive) ship.takeHit();
+            this.pendingEvents.push({ e: 'hit', x: ship.x, y: ship.y, by: -1, on: i });
+            break;
+          }
+        }
+      }
       if (this.phase === 'battle' && ship.alive) this.scores[i].time += dt; // survival score
     });
 
     if (this.phase === 'battle') this.updateRams(dt);
     if (this.phase === 'battle') this.updateWhirlpool(dt);
+    if (this.phase === 'battle') this.updateIcebergs(dt);
     if (this.phase === 'battle') this.updatePickups(dt);
 
     if (this.phase === 'battle') {
@@ -1322,7 +1392,10 @@ export class MpSession {
           break;
         }
       }
-      if (!ball.spent && islandHitsPoint(this.islands, ball.x, ball.y)) {
+      if (
+        !ball.spent &&
+        (islandHitsPoint(this.islands, ball.x, ball.y) || icebergHitsPoint(this.icebergs, ball.x, ball.y))
+      ) {
         ball.spent = true;
         this.pendingEvents.push({ e: 'splash', x: ball.x, y: ball.y });
       }
@@ -1691,6 +1764,18 @@ export class MpSession {
     });
   }
 
+  /** Icebergs drift with the current wind direction, wrapping across world
+   *  edges like everything else. Their jagged shape is fixed at spawn (see
+   *  generateIcebergs) — only position moves. */
+  private updateIcebergs(dt: number) {
+    const dx = Math.cos(this.wind.direction) * ICEBERG_SPEED * dt;
+    const dy = Math.sin(this.wind.direction) * ICEBERG_SPEED * dt;
+    for (const berg of this.icebergs) {
+      berg.x = ((berg.x + dx) % this.worldW + this.worldW) % this.worldW;
+      berg.y = ((berg.y + dy) % this.worldH + this.worldH) % this.worldH;
+    }
+  }
+
   // ── Power-ups (host) ────────────────────────────────────────────────────────
 
   private updatePickups(dt: number) {
@@ -1865,6 +1950,7 @@ export class MpSession {
       wind: this.wind.direction,
       events: this.pendingEvents,
       pickups: this.pickups.map((p) => ({ t: p.type, x: p.x, y: p.y })),
+      icebergs: this.icebergs.map((b) => ({ x: b.x, y: b.y })),
       eye: this.eyeR,
       freeze: this.freeze,
       timeLeft: this.timeLeft,
@@ -1906,6 +1992,7 @@ export class MpSession {
           this.scatterWaves();
         }
         this.islands = msg.islands;
+        this.icebergs = msg.icebergs;
         this.spawns = msg.ships;
         this.you = msg.you;
         this.mode = msg.mode;
@@ -2014,6 +2101,12 @@ export class MpSession {
         this.targets = msg.ships;
         this.ballStates = msg.balls;
         this.pickups = msg.pickups.map((p) => ({ id: 0, type: p.t, x: p.x, y: p.y, ttl: 1 }));
+        msg.icebergs.forEach((pos, i) => {
+          if (this.icebergs[i]) {
+            this.icebergs[i].x = pos.x;
+            this.icebergs[i].y = pos.y;
+          }
+        });
         this.eyeR = msg.eye;
         this.freeze = msg.freeze;
         this.timeLeft = msg.timeLeft;
@@ -2342,6 +2435,7 @@ export class MpSession {
     }
 
     for (const island of this.islands) drawIsland(ctx, island);
+    for (const berg of this.icebergs) this.drawIceberg(berg);
 
     this.drawPickups();
 
@@ -2401,6 +2495,50 @@ export class MpSession {
   private drawTouchControls() {
     const sub = this.ships[this.you]?.type === 'submarine';
     this.touch.draw(this.ctx, this.viewW, this.viewH, sub);
+  }
+
+  /** A drifting ice floe: a jagged pale silhouette (shape fixed at spawn, see
+   *  generateIcebergs) with a darker crackled rim and a soft blue-white glow —
+   *  reads as "solid hazard" at a glance, distinct from an island's sand. */
+  private drawIceberg(berg: IcebergData) {
+    const ctx = this.ctx;
+    ctx.save();
+    ctx.translate(berg.x, berg.y);
+
+    ctx.beginPath();
+    berg.points.forEach((p, i) => {
+      const px = Math.cos(p.a) * berg.r * p.d;
+      const py = Math.sin(p.a) * berg.r * p.d;
+      if (i === 0) ctx.moveTo(px, py);
+      else ctx.lineTo(px, py);
+    });
+    ctx.closePath();
+
+    ctx.fillStyle = 'rgba(180, 225, 240, 0.35)';
+    ctx.save();
+    ctx.scale(1.15, 1.15);
+    ctx.fill();
+    ctx.restore();
+
+    const grad = ctx.createLinearGradient(-berg.r, -berg.r, berg.r, berg.r);
+    grad.addColorStop(0, '#f2fbff');
+    grad.addColorStop(1, '#bfe4f2');
+    ctx.fillStyle = grad;
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(90, 150, 170, 0.8)';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.7)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(-berg.r * 0.3, -berg.r * 0.35);
+    ctx.lineTo(berg.r * 0.15, -berg.r * 0.1);
+    ctx.moveTo(berg.r * 0.1, berg.r * 0.2);
+    ctx.lineTo(-berg.r * 0.2, berg.r * 0.4);
+    ctx.stroke();
+
+    ctx.restore();
   }
 
   /** The maelstrom: a swirling danger wash outside the calm circular eye. */

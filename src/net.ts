@@ -43,6 +43,21 @@ export interface PickupState {
   y: number;
 }
 
+// Icebergs drift, so their shape (fixed at spawn) and position (changes every
+// tick) travel separately: the jagged outline ships once in 'start', ongoing
+// positions ride the regular 'state' snapshot like everything else that moves.
+export interface IcebergData {
+  x: number;
+  y: number;
+  r: number;
+  points: Array<{ a: number; d: number }>; // jagged outline: angle + radius fraction
+}
+
+export interface IcebergPos {
+  x: number;
+  y: number;
+}
+
 export interface ShipState {
   x: number;
   y: number;
@@ -98,6 +113,7 @@ export type H2CMsg =
   | {
       t: 'start';
       islands: IslandData[];
+      icebergs: IcebergData[];
       ships: ShipSpawn[];
       you: number;
       mode: MpMode;
@@ -116,6 +132,7 @@ export type H2CMsg =
       wind: number;
       events: GameEvent[];
       pickups: PickupState[];
+      icebergs: IcebergPos[]; // index-aligned with the shapes sent in 'start'
       eye: number; // whirlpool eye radius in px (shrinks over time; large = no maelstrom yet)
       freeze: number; // start-of-round locate-your-ship pause remaining, s
       timeLeft: number; // Leaderboard match seconds remaining; -1 in untimed (Survivor) matches

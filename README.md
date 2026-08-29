@@ -43,6 +43,13 @@ starts the battle once 2–11 captains are in.
   translucent shallow-water blocks warns you, then solid sand means death —
   **running aground is fatal**. Cannonballs splash harmlessly into the sand,
   so islands double as cover.
+- **Icebergs** — 3–5 jagged ice floes per battle, drifting with the current
+  **wind direction** at a slow, steady crawl (route around them — you won't
+  outrun one, but you won't need to either). **Touch one and your hull is
+  destroyed outright**, same as running aground; cannonballs splash off them
+  too. Unlike islands, bots don't yet steer clear of them — dodging a moving
+  hazard is a bigger problem than dodging a fixed one, so bots can blunder
+  into the ice; watch for it yourself either way.
 - **Shared world** — everyone plays in the same fixed 1600×1000 arena,
   letterboxed to fit each screen, spawning on a ring facing the center. Wind
   affects all captains equally.
