@@ -538,6 +538,7 @@ export class Game {
     if (b.mgT > 0) {
       if (p.reload <= 0) {
         if (p.type === 'submarine') this.fireTorpedo();
+        else if (b.doubleT > 0) this.fireBoth(p, MG_RELOAD);
         else this.fireBroadside(p, MG_RELOAD);
         this.onCannonFire?.();
       }
@@ -558,6 +559,7 @@ export class Game {
       b.mgArmed = false;
       b.mgT = MG_DURATION;
       if (p.type === 'submarine') this.fireTorpedo();
+      else if (b.doubleT > 0) this.fireBoth(p, MG_RELOAD);
       else this.fireBroadside(p, MG_RELOAD);
       this.onCannonFire?.();
       haptic(15);
@@ -583,14 +585,18 @@ export class Game {
     const b = this.enemyBuff;
 
     if (b.mgT > 0) {
-      if (e.reload <= 0) this.fireBroadside(e, MG_RELOAD);
+      if (e.reload <= 0) {
+        if (b.doubleT > 0) this.fireBoth(e, MG_RELOAD);
+        else this.fireBroadside(e, MG_RELOAD);
+      }
       return;
     }
     if (!wantsToFire(e, this.player, aiOpts) || e.reload > 0) return;
     if (b.mgArmed) {
       b.mgArmed = false;
       b.mgT = MG_DURATION;
-      this.fireBroadside(e, MG_RELOAD);
+      if (b.doubleT > 0) this.fireBoth(e, MG_RELOAD);
+      else this.fireBroadside(e, MG_RELOAD);
     } else if (b.doubleT > 0) {
       this.fireBoth(e, reloadTime);
     } else {

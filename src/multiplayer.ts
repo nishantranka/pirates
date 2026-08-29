@@ -1237,7 +1237,9 @@ export class MpSession {
         // is armed by a trigger press, so the stream is always player-initiated.
         if (b.mgUntil > this.clock) {
           if (ship.reload <= 0) {
-            if (sub) this.fireTorpedo(ship, MG_RELOAD_SUB, 0);
+            const dbl = b.doubleUntil > this.clock;
+            if (sub) this.fireTorpedo(ship, MG_RELOAD_SUB, dbl ? 0.07 : 0);
+            else if (dbl) this.fireBoth(ship, MG_RELOAD);
             else this.fireSide(ship, 1, MG_RELOAD);
             this.pendingEvents.push({ e: 'fire', by: i });
           }
@@ -1267,7 +1269,9 @@ export class MpSession {
           if (!triggered) return;
           b.mgArmed = false;
           b.mgUntil = this.clock + MG_DURATION;
-          if (sub) this.fireTorpedo(ship, MG_RELOAD_SUB, 0);
+          const dbl = b.doubleUntil > this.clock;
+          if (sub) this.fireTorpedo(ship, MG_RELOAD_SUB, dbl ? 0.07 : 0);
+          else if (dbl) this.fireBoth(ship, MG_RELOAD);
           else this.fireSide(ship, 1, MG_RELOAD);
           this.pendingEvents.push({ e: 'fire', by: i });
           return;
@@ -1279,7 +1283,7 @@ export class MpSession {
         if (b.doubleUntil > this.clock) {
           // 2× Fire: both sides for a single volley slot (a doubled magazine).
           if (sub) this.fireTorpedo(ship, 0, 0.07);
-          else this.fireBoth(ship);
+          else this.fireBoth(ship, RELOAD);
         } else if (sub) {
           this.fireTorpedo(ship, 0, 0);
         } else {
@@ -1418,9 +1422,9 @@ export class MpSession {
   }
 
   /** Double-broadside power-up: fire both sides at once. */
-  private fireBoth(shooter: Ship) {
-    this.fireSide(shooter, 1, RELOAD);
-    this.fireSide(shooter, -1, RELOAD);
+  private fireBoth(shooter: Ship, reload: number) {
+    this.fireSide(shooter, 1, reload);
+    this.fireSide(shooter, -1, reload);
   }
 
   /** Submarine bow torpedo(es); spread > 0 launches a symmetric pair. */
