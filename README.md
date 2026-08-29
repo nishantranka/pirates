@@ -69,10 +69,15 @@ starts the battle once 2–11 captains are in.
   to orient before anyone can be hit.
 - **Maelstrom** — after a short calm a whirlpool forms at the center and ramps
   up: an inward **current tows every ship toward the middle** (with a swirling
-  drift), and a circular calm **eye shrinks over time**. There's no damage for
-  being outside — the pull itself is strong enough that even a ship sailing
-  straight out gets dragged back in. Because it's radial it works with the
-  wrap-around world: sailing across the screen just tows you back to the fight.
+  drift), and a circular calm **eye shrinks over time** — the pull alone is
+  strong enough that even a ship sailing straight out gets dragged back in.
+  If the current instead **grinds a hull against an island** it can't push it
+  past, that's fatal outright — same as running aground. Short of that, a
+  ship that's merely stuck outside the eye without being pinned starts
+  costing **1 hp/s** after a **3-second grace period**, so there's no way to
+  sit out the endgame unscathed just past the edge. Because the pull is
+  radial it works with the wrap-around world: sailing across the screen just
+  tows you back to the fight.
   As captains are eliminated, **fewer bounties spawn**, tightening the endgame.
 - **Host-authoritative netcode** — the room creator simulates the battle and
   broadcasts 30 Hz snapshots; guests send steering/fire inputs and render with

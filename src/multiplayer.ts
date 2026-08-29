@@ -137,6 +137,12 @@ const EYE_MIN = 150; // fully-formed eye radius
 // straight out gets dragged inward — the current alone converges the fight.
 const PULL_MAX = 188; // px/s inward current at full strength (outside the eye)
 const SWIRL_FRAC = 0.5; // tangential swirl as a fraction of the inward pull
+// A ship can still end up stuck outside the eye despite the pull — usually
+// pinned against an island the current isn't allowed to shove it onto. Once
+// stranded out there too long, it starts taking real damage, so hugging the
+// shore just past the edge isn't a way to sit out the endgame unscathed.
+const MAELSTROM_STRAND_GRACE = 3; // s outside the eye before it starts hurting
+const MAELSTROM_DPS = 1; // hp/s lost while stranded past the grace period
 
 // Spawn cadence per type (min, max seconds). Health is common; the rest rarer.
 const PICKUP_SPAWN: Record<PickupType, [number, number]> = {
@@ -462,6 +468,7 @@ export class MpSession {
   private scoreView: { score: number; kills: number }[] = []; // host + guest (leaderboard)
   private ramCd: number[] = []; // per-ship ram-damage cooldown (host)
   private spawnUntil: number[] = []; // per-ship spawn-invulnerability expiry (host)
+  private strandedFor: number[] = []; // s continuously outside the maelstrom eye (host)
   private respawnAt: number[] = []; // clock time a sunk ship respawns (Leaderboard); Infinity = n/a
   private moveFreezeUntil: number[] = []; // clock until a (re)spawned ship may move/fire (host)
   private timeLeft = -1; // Leaderboard match seconds remaining (host computes, guest mirrors); -1 = untimed
@@ -925,6 +932,7 @@ export class MpSession {
     this.scoreView.push({ score: 0, kills: 0 });
     this.ramCd.push(0);
     this.spawnUntil.push(this.clock + SPAWN_PROTECT);
+    this.strandedFor.push(0);
     this.respawnAt.push(Infinity);
     this.moveFreezeUntil.push(this.clock + RESPAWN_FREEZE);
     this.diveCharge.push(DIVE_MAX);
@@ -1069,6 +1077,7 @@ export class MpSession {
     this.scoreView = this.spawns.map(() => ({ score: 0, kills: 0 }));
     this.ramCd = this.spawns.map(() => 0);
     this.spawnUntil = this.spawns.map(() => SPAWN_PROTECT); // clock starts at 0
+    this.strandedFor = this.spawns.map(() => 0);
     this.respawnAt = this.spawns.map(() => Infinity);
     this.moveFreezeUntil = this.spawns.map(() => 0);
     this.timeLeft = this.mode === 'score' ? MATCH_DURATION : -1;
@@ -1591,6 +1600,7 @@ export class MpSession {
     this.spawnUntil[i] = this.clock + SPAWN_PROTECT; // shield bubble + glow, like the start
     this.moveFreezeUntil[i] = this.clock + RESPAWN_FREEZE; // hold the helm for a beat
     this.respawnAt[i] = Infinity;
+    this.strandedFor[i] = 0; // a fresh spawn near the middle isn't stranded
   }
 
   /** A clear point in the central 50% of the arena — with real water between
@@ -1669,7 +1679,7 @@ export class MpSession {
 
     const cx = this.worldW / 2;
     const cy = this.worldH / 2;
-    this.ships.forEach((ship) => {
+    this.ships.forEach((ship, i) => {
       if (!ship.alive) return;
       const dx = cx - ship.x;
       const dy = cy - ship.y;
@@ -1683,11 +1693,31 @@ export class MpSession {
       const sw = SWIRL_FRAC * pull;
       const tx = ship.x + (nx * pull - ny * sw) * dt;
       const ty = ship.y + (ny * pull + nx * sw) * dt;
-      // Don't let the current sweep a ship onto a lethal island.
-      if (!shipHitsIsland(this.islands, { x: tx, y: ty, width: ship.width })) {
+      const pinned = shipHitsIsland(this.islands, { x: tx, y: ty, width: ship.width });
+      if (!pinned) {
         ship.x = tx;
         ship.y = ty;
+      } else if (this.spawnUntil[i] <= this.clock) {
+        // The current is grinding this hull against the rocks — that's the
+        // root cause of a ship going "stuck" outside the eye in the first
+        // place, and it's exactly as fatal as running aground outright.
+        // Don't leave it pinned there to slowly bleed out instead.
+        while (ship.alive) ship.takeHit();
+        this.pendingEvents.push({ e: 'hit', x: ship.x, y: ship.y, by: -1, on: i });
+        this.strandedFor[i] = 0;
+        return;
       }
+
+      // Stranded outside the eye without (yet) being pinned against an
+      // island — start the bleed once the grace period runs out. Fresh
+      // spawns are immune, same as they are to grounding.
+      if (this.spawnUntil[i] > this.clock) return;
+      if (!outside) {
+        this.strandedFor[i] = 0;
+        return;
+      }
+      this.strandedFor[i] += dt;
+      if (this.strandedFor[i] > MAELSTROM_STRAND_GRACE) ship.takeHit(MAELSTROM_DPS * dt);
     });
   }
 
