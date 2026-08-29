@@ -153,7 +153,9 @@
             against 5, 10 or 15 bots — no room, no waiting. For real crew, pick
             <b>Play with Friends</b>, create a room and share the 5-letter code — or tap
             <b>🔗 Copy invite link</b>
-            and friends just click it to join. <b>Friends can even join mid-battle</b> —
+            and friends just click it to join. No code on hand? The <b>Join a Room</b> screen
+            lists whatever rooms are open right now — tap one to fill in its code.
+            <b>Friends can even join mid-battle</b> —
             they drop in like a respawn, spawn shield and all. <b>Human captains sail bright colored
             hulls</b> (yellow, blue, orange, …) while <b>bots are grey</b>, so the real
             players stand out in a crowd — and you still see your own ship as pink. Or hit <b>Fill with Bots</b> for an
@@ -249,6 +251,10 @@
             <div id="code-field" class="hidden">
               <div class="section-label">Room code</div>
               <input id="mp-code" class="mp-input mp-code" maxlength="5" placeholder="CODE" autocomplete="off" />
+              <div class="section-label">Open rooms — tap one to fill in its code</div>
+              <div id="room-list" class="room-list">
+                <div class="hint" id="room-list-hint">Looking for open rooms…</div>
+              </div>
             </div>
           </div>
 

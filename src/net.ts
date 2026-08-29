@@ -8,7 +8,7 @@ import type { DataConnection } from 'peerjs';
 import type { IslandData } from './island';
 import type { ShipTypeName, Team, Turn } from './ship';
 
-const ID_PREFIX = 'pirates-nvc1-';
+export const ID_PREFIX = 'pirates-nvc1-';
 // No 0/O/1/I/L — codes get read aloud.
 const CODE_CHARS = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
 export const CODE_LENGTH = 5;

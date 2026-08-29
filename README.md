@@ -33,9 +33,10 @@ whole Bots Arena — win condition, hull, fleet size — and sails on the spot.
 ## Multiplayer
 
 Pick **Play with Friends**, then **Create a Room** (you get a 5-letter room
-code) or **Join a Room** with a friend's code, naming your ship on the way in.
-In the lobby every captain chooses their own boat and readies up; the host
-starts the battle once 2–11 captains are in.
+code) or **Join a Room** with a friend's code — or skip the code entirely and
+tap one of the **currently open rooms** listed right there, if anyone's
+already hosting. In the lobby every captain chooses their own boat and readies
+up; the host starts the battle once 2–11 captains are in.
 
 - **Free-for-all** — a shared arena where it's sink or be sunk. Play a timed
   Leaderboard deathmatch (respawns) or last-ship-standing Survivor.
@@ -78,6 +79,12 @@ starts the battle once 2–11 captains are in.
   broadcasts 30 Hz snapshots; guests send steering/fire inputs and render with
   smoothing. Rooms are matched through the free public PeerJS broker, then all
   game traffic flows peer-to-peer.
+- **Open-room browser, no server required** — there's still no backend of our
+  own, so a well-known PeerJS ID doubles as a shared room directory: whichever
+  browser tab claims it first lists every room announced to it, and if that
+  tab closes, everyone still connected races to re-elect a new one and
+  re-announce. The **Join a Room** screen shows whatever's currently open —
+  tap one to fill in its code, or type a friend's code by hand as before.
 - **Submarine** — a fourth boat, playable in practice and multiplayer:
   engine-powered (wind never touches
   it) and armed with a single **bow torpedo** — faster, longer-ranged, and

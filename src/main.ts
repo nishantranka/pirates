@@ -1,3 +1,4 @@
+import { announceRoom, browseRooms, type RoomAnnouncer, type RoomBrowser, type RoomListing } from './directory';
 import { Game, DIFFICULTIES, type DifficultyName } from './game';
 import { Input } from './input';
 import { MpSession, MAX_PLAYERS, crewColor, type LeaderboardEntry } from './multiplayer';
@@ -216,6 +217,10 @@ function renderMenu() {
   if (active !== shownPanel) {
     panel.querySelectorAll('.card.selected').forEach((c) => c.classList.remove('selected'));
     shownPanel = active;
+    // The open-room list only makes sense while the code field is showing —
+    // stop on every other transition, start fresh on arriving here to join.
+    stopBrowsingRooms();
+    if (active === 'fname' && selectedRoom === 'join') startBrowsingRooms();
   }
   wizardBar.classList.toggle('hidden', atRoot);
   wizCount.textContent = atRoot ? '' : `Step ${stepIndex + 1} of ${steps.length}`;
@@ -533,6 +538,74 @@ let myShip: ShipTypeName = 'small';
 // the lobby entirely", which also relabels the end screen's lobby button.
 let arenaBots: number | null = null;
 
+// ── Open-room browser (Join step) ───────────────────────────────────────────
+// See directory.ts: there's no backend, so a well-known PeerJS ID doubles as
+// a shared room directory. roomBrowser is active only while the Join step is
+// on screen; roomAnnouncer is active for the lifetime of a hosted (non-arena)
+// room, so it can be joined without a shared code.
+
+const roomListEl = document.getElementById('room-list')!;
+const roomListHint = document.getElementById('room-list-hint')!;
+let roomBrowser: RoomBrowser | null = null;
+let roomAnnouncer: RoomAnnouncer | null = null;
+
+function modeLabel(mode: MpMode): string {
+  return mpModeOptions.find((o) => o.key === mode)?.label ?? mode;
+}
+
+function renderRoomList(rooms: RoomListing[]) {
+  roomListEl.innerHTML = '';
+  if (!rooms.length) {
+    roomListHint.textContent = 'No open rooms right now — ask a friend for their code, or create one.';
+    roomListEl.appendChild(roomListHint);
+    return;
+  }
+  for (const room of rooms) {
+    const row = document.createElement('button');
+    row.type = 'button';
+    row.className = 'room-row';
+    row.innerHTML =
+      `<span class="r-code">${room.code}</span>` +
+      `<span class="r-info">` +
+      `<span class="r-host">${escapeHtml(room.hostName)}</span>` +
+      `<span class="r-meta">${escapeHtml(room.mode)} · ${room.players}/${room.maxPlayers}</span>` +
+      `</span>`;
+    row.addEventListener('click', () => {
+      mpCodeInput.value = room.code;
+      mpCodeInput.focus();
+    });
+    roomListEl.appendChild(row);
+  }
+}
+
+function escapeHtml(s: string): string {
+  const div = document.createElement('div');
+  div.textContent = s;
+  return div.innerHTML;
+}
+
+function startBrowsingRooms() {
+  if (roomBrowser) return;
+  roomListHint.textContent = 'Looking for open rooms…';
+  roomListEl.innerHTML = '';
+  roomListEl.appendChild(roomListHint);
+  roomBrowser = browseRooms(renderRoomList);
+}
+
+function stopBrowsingRooms() {
+  roomBrowser?.stop();
+  roomBrowser = null;
+}
+
+function stopAnnouncingRoom() {
+  roomAnnouncer?.stop();
+  roomAnnouncer = null;
+}
+
+// A closed/refreshed tab should clear its listing promptly rather than
+// waiting out the directory's staleness timeout.
+window.addEventListener('pagehide', stopAnnouncingRoom);
+
 // Battle-mode cards inside the lobby — the host picks the win condition.
 const lobbyModeRow = document.getElementById('lobby-mode-cards')!;
 mpModeOptions.forEach(({ key, label, stat }) => {
@@ -660,6 +733,7 @@ function renderLobby(players: LobbyPlayerInfo[], you: number, canStart: boolean,
 }
 
 function endMpSession(errorMessage?: string) {
+  stopAnnouncingRoom();
   const wasArena = arenaBots !== null;
   mp?.leave();
   mp = null;
@@ -705,6 +779,18 @@ function mpCallbacks() {
       if (code) {
         roomCodeEl.textContent = code;
         roomCodeLabel.textContent = 'Room code — share it with your crew';
+        // List it so it shows up for anyone browsing, not just people with the
+        // code. Guards against re-announcing under a second listing on a
+        // broker reconnect — the directory link itself re-announces that.
+        if (mp?.isHost && !roomAnnouncer) {
+          roomAnnouncer = announceRoom({
+            code,
+            hostName: shipName(),
+            players: 1,
+            maxPlayers: MAX_PLAYERS,
+            mode: modeLabel(mp.gameMode),
+          });
+        }
       } else {
         // Broker unreachable — solo/bot play still works, just no remote joiners.
         roomCodeEl.textContent = 'OFFLINE';
@@ -713,6 +799,7 @@ function mpCallbacks() {
     },
     onLobby(players: LobbyPlayerInfo[], you: number, canStart: boolean, mode: MpMode) {
       renderLobby(players, you, canStart, mode);
+      roomAnnouncer?.update({ players: players.length, maxPlayers: MAX_PLAYERS, mode: modeLabel(mode) });
     },
     onStart() {
       // Hosts reach here inside the Start Battle tap, so the fullscreen +
@@ -823,6 +910,7 @@ function joinRoom() {
     mpStatus.textContent = `Room codes are ${CODE_LENGTH} characters.`;
     return;
   }
+  stopBrowsingRooms();
   rememberName();
   mpStatus.textContent = 'Joining…';
   setSailBtn.disabled = true;
