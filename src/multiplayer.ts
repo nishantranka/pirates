@@ -185,10 +185,20 @@ const WHEEL_DEADZONE = 40;
 
 const SNAPSHOT_INTERVAL = 1 / 30;
 const INPUT_INTERVAL = 0.05; // guest input heartbeat
+const MAX_SHIP_VEL = 600; // px/s cap on the velocity reported in a snapshot (see sendSnapshot)
 const END_DELAY = 1.7; // let the sinking animation play before declaring a winner
 const WAVE_DRIFT = 14;
-const SMOOTH_RATE = 14; // guest position smoothing (higher = snappier)
+const SMOOTH_RATE = 14; // guest position smoothing for other ships (higher = snappier)
 const SNAP_DIST = 250; // beyond this a target jump is a wrap/teleport — snap, don't glide
+// A reconcileOwnShip correction below this is ordinary per-snapshot drift —
+// stays instant/imperceptible, as it always has. Above it (but still under
+// SNAP_DIST, which is a real wrap/respawn teleport) it's a network hiccup
+// catching up — worth animating so it reads as a quick catch-up dash rather
+// than a jump-cut. See predictOwnShip's `catchUp` handling.
+const CATCHUP_MIN = 80;
+const CATCHUP_SPEED = 900; // px/s the local ship "dashes" at while catching up
+const CATCHUP_TURN_RATE = 8; // heading catch-up blend rate (higher = snappier)
+const EXTRAPOLATE_MAX = 0.2; // s — cap on dead-reckoning other ships past their last snapshot
 
 // Humans sail vivid hulls, bots sail greys — so the real players pop out of a
 // crowded bot fleet at a glance. (Your own hull is repainted pink locally, so
@@ -402,6 +412,7 @@ interface HostPlayer {
   dive: boolean;
   reload: boolean; // latched R request (humans); consumed by the fire tick
   touch: boolean; // captain is on a touch screen (no R key — taps reload instead)
+  lastInputSeq: number; // highest 'input' seq applied so far (echoed back for guest replay reconciliation)
 }
 
 export interface MpCallbacks {
@@ -438,6 +449,12 @@ export class MpSession {
   private pendingEvents: GameEvent[] = [];
   private endTimer = -1;
   private snapshotAcc = 0;
+  // Measured per-ship velocity for guest dead-reckoning (see sendSnapshot):
+  // real position delta since the last snapshot, not a formula recomputed
+  // from speed/wind — so it automatically captures whirlpool current, ram
+  // knockback, anything else that moves a ship outside Ship.update() too.
+  private prevSnapPos: Array<{ x: number; y: number }> = [];
+  private prevSnapAt = -1;
 
   // Guest state
   private conn: DataConnection | null = null;
@@ -446,6 +463,24 @@ export class MpSession {
   private lastSnapAt = 0;
   private inputAcc = 0;
   private lastSent = { turn: 0 as Turn, fire: false, dive: false };
+  // Own-ship reconciliation: every local physics step is buffered (see
+  // predictOwnShip) tagged with a monotonic step count; every sent input is
+  // tagged with a seq and the step count at send time. When the host echoes
+  // back the seq it has applied, we know which buffered steps are already
+  // baked into its snapshot and can replay only the rest — see
+  // reconcileOwnShip. This is the standard FPS client-prediction pattern
+  // (reset to the last acknowledged state, replay unacked inputs) rather
+  // than a continuous blend toward the snapshot, which fights prediction
+  // and stutters under any latency hiccup.
+  private inputSeq = 0;
+  private totalSteps = 0;
+  private stepBuffer: Array<{ idx: number; dt: number; turn: Turn; sf: number; boost: number; braking: boolean }> =
+    [];
+  private pendingAcks: Array<{ seq: number; steps: number }> = [];
+  // Set when reconcileOwnShip finds a mid-sized correction (a hiccup, not
+  // ordinary drift): predictOwnShip dashes the ship toward this each frame
+  // instead of teleporting there in one reconcile.
+  private catchUp: { x: number; y: number; heading: number } | null = null;
 
   // Shared battle state (host simulates; guest mirrors)
   private you = 0;
@@ -494,6 +529,17 @@ export class MpSession {
   private prevMyKills = 0; // last frame's own kill count, for the kill fanfare
   private prevMeAlive = true; // last frame's own alive flag, for the sunk cue
 
+  // TEMPORARY netcode diagnostics — enable with ?debug on the URL. Surfaces
+  // exactly the numbers needed to tell a real network stall apart from a
+  // reconciliation bug: the gap between snapshots, and how far a snapshot's
+  // replay actually had to move the ship. Remove once the stutter reports
+  // are root-caused.
+  private readonly debugOn =
+    typeof location !== 'undefined' && new URLSearchParams(location.search).has('debug');
+  private debugEl: HTMLPreElement | null = null;
+  private debugLog: string[] = [];
+  private prevStateAt = 0;
+
   private constructor(
     isHost: boolean,
     ctx: CanvasRenderingContext2D,
@@ -508,6 +554,7 @@ export class MpSession {
     this.sounds = sounds;
     // Dev-only hook so E2E tests can observe the simulation; stripped in prod.
     if (import.meta.env.DEV) (window as unknown as { __mp: MpSession }).__mp = this;
+    if (this.debugOn && !this.isHost) this.debugEl = createDebugOverlay();
     for (let i = 0; i < 40; i++) {
       this.waves.push({
         x: Math.random() * this.worldW,
@@ -575,7 +622,7 @@ export class MpSession {
   ): MpSession {
     const s = new MpSession(true, ctx, input, cb, sounds);
     s.players = [
-      { conn: null, name: cleanName(name), ship: 'small', ready: false, connected: true, bot: false, turn: 0, fire: false, dive: false, reload: false, touch: false },
+      { conn: null, name: cleanName(name), ship: 'small', ready: false, connected: true, bot: false, turn: 0, fire: false, dive: false, reload: false, touch: false, lastInputSeq: 0 },
     ];
     // Open the lobby immediately so bot play never waits on (or requires) the
     // matchmaking broker; the room code fills in when/if the broker responds.
@@ -655,6 +702,7 @@ export class MpSession {
       dive: false,
       reload: false,
       touch: false,
+      lastInputSeq: 0,
     };
   }
 
@@ -815,6 +863,7 @@ export class MpSession {
         dive: false,
         reload: false,
         touch: false,
+        lastInputSeq: 0,
       });
       this.pushLobby();
       return;
@@ -835,6 +884,7 @@ export class MpSession {
       player.dive = !!msg.dive;
       if (msg.reload) player.reload = true; // latch only; the fire tick clears it
       player.touch = !!msg.touch;
+      player.lastInputSeq = Math.max(player.lastInputSeq, msg.seq);
     }
   }
 
@@ -890,6 +940,7 @@ export class MpSession {
       dive: false,
       reload: false,
       touch: false,
+      lastInputSeq: 0,
     };
     this.players.push(player);
     const i = this.players.length - 1;
@@ -1839,11 +1890,32 @@ export class MpSession {
   }
 
   private sendSnapshot() {
+    const now = performance.now();
+    const dt = this.prevSnapAt > 0 ? (now - this.prevSnapAt) / 1000 : SNAPSHOT_INTERVAL;
+    this.prevSnapAt = now;
+    const velocities = this.ships.map((s, i) => {
+      const prev = this.prevSnapPos[i] ?? { x: s.x, y: s.y };
+      // wrapDelta so a world-edge crossing between snapshots reads as the
+      // real short displacement, not a delta the size of the whole map.
+      const dx = wrapDelta(s.x - prev.x, this.worldW);
+      const dy = wrapDelta(s.y - prev.y, this.worldH);
+      this.prevSnapPos[i] = { x: s.x, y: s.y };
+      const vx = dx / dt;
+      const vy = dy / dt;
+      // Clamp: a respawn teleport or a hard ram knockback is a real jump,
+      // not sustained motion — reporting it as velocity would send a guest's
+      // dead-reckoning flying off in a straight line for no reason.
+      const speed = Math.hypot(vx, vy);
+      const scale = speed > MAX_SHIP_VEL ? MAX_SHIP_VEL / speed : 1;
+      return { vx: vx * scale, vy: vy * scale };
+    });
     const msg: H2CMsg = {
       t: 'state',
       ships: this.ships.map((s, i) => ({
         x: s.x,
         y: s.y,
+        vx: velocities[i].vx,
+        vy: velocities[i].vy,
         heading: s.heading,
         health: s.health,
         sink: s.sinkProgress,
@@ -1860,6 +1932,7 @@ export class MpSession {
         kills: this.scoreView[i]?.kills ?? 0,
         ammo: this.mag[i] ?? 0,
         rl: this.reloadT[i] > 0 ? this.reloadT[i] / MAG_RELOAD : 0,
+        ack: this.players[i]?.lastInputSeq ?? 0,
       })),
       balls: this.balls.map((b) => ({ x: b.x, y: b.y, vx: b.vx, vy: b.vy, tp: b.torpedo })),
       wind: this.wind.direction,
@@ -1877,6 +1950,14 @@ export class MpSession {
 
   private onHostMessage(msg: H2CMsg, code: string) {
     if (!this.active || !msg || typeof msg !== 'object') return;
+
+    // TEMPORARY: raw record of every message as it arrives, so a real gap
+    // between 'state' messages (or anything unexpected in between) shows up
+    // directly in the console timeline instead of only in the summarized
+    // debug overlay. Same ?debug toggle; remove alongside it.
+    if (this.debugOn) {
+      console.log(`[recv ${(performance.now() / 1000).toFixed(3)}s]`, msg.t, msg);
+    }
 
     switch (msg.t) {
       case 'reject':
@@ -1924,6 +2005,8 @@ export class MpSession {
         this.targets = msg.ships.map((sp) => ({
           x: sp.x,
           y: sp.y,
+          vx: 0,
+          vy: 0,
           heading: sp.heading,
           health: SHIP_TYPES[sp.type].maxHealth,
           sink: 0,
@@ -1940,6 +2023,7 @@ export class MpSession {
           kills: 0,
           ammo: SHIP_TYPES[sp.type].guns * MAG_BROADSIDES,
           rl: 0,
+          ack: 0,
         }));
         this.buffView = msg.ships.map(() => ({
           shield: 0,
@@ -1960,6 +2044,12 @@ export class MpSession {
         this.splashes = [];
         this.wind = new Wind();
         this.lastSent = { turn: 0, fire: false, dive: false };
+        // inputSeq is NOT reset — it must stay monotonic against the host's
+        // lastInputSeq, which also isn't reset across rounds. totalSteps and
+        // the buffers are purely local bookkeeping and safe to zero here.
+        this.totalSteps = 0;
+        this.stepBuffer = [];
+        this.pendingAcks = [];
         this.phase = 'battle';
         this.cb.onStart();
         this.startLoop();
@@ -1978,6 +2068,8 @@ export class MpSession {
           this.targets.push({
             x: sp.x,
             y: sp.y,
+            vx: 0,
+            vy: 0,
             heading: sp.heading,
             health: SHIP_TYPES[sp.type].maxHealth,
             sink: 0,
@@ -1994,6 +2086,7 @@ export class MpSession {
             kills: 0,
             ammo: SHIP_TYPES[sp.type].guns * MAG_BROADSIDES,
             rl: 0,
+            ack: 0,
           });
           this.buffView.push({
             shield: 0,
@@ -2020,6 +2113,7 @@ export class MpSession {
         this.lastSnapAt = performance.now();
         this.wind.direction = msg.wind;
         this.applyEvents(msg.events);
+        this.reconcileOwnShip();
         break;
 
       case 'end':
@@ -2036,15 +2130,17 @@ export class MpSession {
   }
 
   private guestUpdate(dt: number) {
+    let turn: Turn = 0;
+    let dive = false;
     if (this.phase === 'battle') {
-      const turn: Turn =
+      turn =
         this.input.isDown('ArrowLeft') || this.input.isDown('KeyA')
           ? -1
           : this.input.isDown('ArrowRight') || this.input.isDown('KeyD')
             ? 1
             : 0;
       const fire = this.input.isDown('Space');
-      const dive = this.input.isDown('ArrowDown') || this.input.isDown('KeyS');
+      dive = this.input.isDown('ArrowDown') || this.input.isDown('KeyS');
       // A one-shot reload pulse (touch taps to reload are inferred host-side
       // from an empty-magazine fire, so only the R key needs sending).
       const reload = this.input.wasPressed('KeyR');
@@ -2058,26 +2154,45 @@ export class MpSession {
       ) {
         this.inputAcc = 0;
         this.lastSent = { turn, fire, dive };
+        const seq = ++this.inputSeq;
+        // Cap defensively — only grows unbounded if 'state' snapshots stop
+        // arriving entirely (a dead connection), not under normal play.
+        if (this.pendingAcks.length >= 200) this.pendingAcks.shift();
+        this.pendingAcks.push({ seq, steps: this.totalSteps });
         if (this.conn?.open)
-          this.conn.send({ t: 'input', turn, fire, dive, reload, touch: this.isTouchDevice } satisfies C2HMsg);
+          this.conn.send({ t: 'input', seq, turn, fire, dive, reload, touch: this.isTouchDevice } satisfies C2HMsg);
       }
     }
 
-    // Glide each hull toward its latest snapshot; snap across world-wrap jumps.
+    // Move our own hull from local input right away — see predictOwnShip for
+    // why. Every other hull still just glides toward its latest snapshot.
+    this.predictOwnShip(dt, turn, dive);
+
     const k = 1 - Math.exp(-SMOOTH_RATE * dt);
+    // Dead-reckon other ships from their last snapshot's velocity instead of
+    // gliding toward a point frozen since it arrived — between updates they
+    // keep sailing along their real heading rather than lagging behind it,
+    // and a normal ~33ms gap needs far less catch-up once the next snapshot
+    // lands. Capped short: extrapolating a turning bot's straight-line guess
+    // for too long overshoots, so past EXTRAPOLATE_MAX just use the raw point.
+    const age = Math.min((performance.now() - this.lastSnapAt) / 1000, EXTRAPOLATE_MAX);
     this.ships.forEach((ship, i) => {
       const t = this.targets[i];
       if (!t) return;
-      const dx = t.x - ship.x;
-      const dy = t.y - ship.y;
-      if (Math.abs(dx) > SNAP_DIST || Math.abs(dy) > SNAP_DIST) {
-        ship.x = t.x;
-        ship.y = t.y;
-        ship.heading = t.heading;
-      } else {
-        ship.x += dx * k;
-        ship.y += dy * k;
-        ship.heading += angleDiff(t.heading, ship.heading) * k;
+      if (i !== this.you) {
+        const tx = ((t.x + t.vx * age) % this.worldW + this.worldW) % this.worldW;
+        const ty = ((t.y + t.vy * age) % this.worldH + this.worldH) % this.worldH;
+        const dx = tx - ship.x;
+        const dy = ty - ship.y;
+        if (Math.abs(dx) > SNAP_DIST || Math.abs(dy) > SNAP_DIST) {
+          ship.x = tx;
+          ship.y = ty;
+          ship.heading = t.heading;
+        } else {
+          ship.x += dx * k;
+          ship.y += dy * k;
+          ship.heading += angleDiff(t.heading, ship.heading) * k;
+        }
       }
       ship.health = t.health;
       ship.sinkProgress = t.sink;
@@ -2098,6 +2213,139 @@ export class MpSession {
 
     this.driftWaves(dt);
     this.tickEffects(dt);
+  }
+
+  /** Guest only: apply local steering input to our own ship the instant it
+   *  happens, using the same physics the host runs, instead of waiting a
+   *  full round trip for a snapshot to move it — that wait is the actual
+   *  "feels laggy when I'm not host" complaint. Every step taken here is
+   *  buffered so reconcileOwnShip can replay it on top of the host's next
+   *  confirmed snapshot. */
+  private predictOwnShip(dt: number, turn: Turn, dive: boolean) {
+    const ship = this.ships[this.you];
+    const t = this.targets[this.you];
+    if (!ship || !t) return;
+
+    // Respawns and the round-start pause hold the ship still on the host,
+    // but we don't mirror that timer over the wire — `inv` (spawn shield)
+    // covers both windows, so just follow the snapshot directly through it
+    // (nothing buffered, so reconcileOwnShip's replay is a no-op then).
+    const frozen = this.phase !== 'battle' || this.freeze > 0 || t.inv;
+    if (frozen || !ship.alive) {
+      this.catchUp = null; // a respawn/round reset already snapped us there
+      return;
+    }
+
+    const boost = this.buffView[this.you]?.spd ? SPEED_MULT : 1;
+    const braking = ship.type !== 'submarine' && dive;
+    const sf = ship.type === 'submarine' ? 1 : this.wind.speedFactor(ship.heading);
+    ship.boostFactor = boost;
+    ship.update(dt, turn, this.worldW, this.worldH, sf, braking);
+    if (this.stepBuffer.length >= 600) this.stepBuffer.shift(); // dead-connection safety valve
+    this.stepBuffer.push({ idx: ++this.totalSteps, dt, turn, sf, boost, braking });
+
+    // Dash toward a pending mid-sized correction (see reconcileOwnShip)
+    // instead of having already teleported there — a hiccup should read as
+    // a quick catch-up, not a jump-cut, while input stays live throughout.
+    if (this.catchUp) {
+      const dx = this.catchUp.x - ship.x;
+      const dy = this.catchUp.y - ship.y;
+      const dist = Math.hypot(dx, dy);
+      const step = CATCHUP_SPEED * dt;
+      if (dist <= step) {
+        ship.x = this.catchUp.x;
+        ship.y = this.catchUp.y;
+        ship.heading = this.catchUp.heading;
+        this.catchUp = null;
+      } else {
+        ship.x += (dx / dist) * step;
+        ship.y += (dy / dist) * step;
+        ship.heading += angleDiff(this.catchUp.heading, ship.heading) * Math.min(1, CATCHUP_TURN_RATE * dt);
+      }
+    }
+  }
+
+  /** Guest only: reconcile our own ship against a fresh host snapshot. Reset
+   *  to the confirmed baseline, then replay every locally-buffered step the
+   *  host's `ack` shows it hasn't accounted for yet — the standard
+   *  prediction/reconciliation pattern (Quake/Source-style netcode), as
+   *  opposed to a continuous blend toward the snapshot: under normal play
+   *  the replay reproduces exactly where we already were (no visible
+   *  correction at all), and it can't compound into a stutter across a
+   *  latency hiccup the way a per-frame spring pull can. */
+  private reconcileOwnShip() {
+    const ship = this.ships[this.you];
+    const t = this.targets[this.you];
+    if (!ship || !t) return;
+
+    const now = performance.now();
+    const gapMs = this.prevStateAt ? now - this.prevStateAt : 0;
+    this.prevStateAt = now;
+    const beforeX = ship.x;
+    const beforeY = ship.y;
+    const beforeHeading = ship.heading;
+    const beforeBrake = ship.brakeFactor;
+    const beforeReload = ship.reload;
+    const bufLenBefore = this.stepBuffer.length;
+    const ackLag = this.inputSeq - t.ack;
+
+    let cutoff = 0;
+    while (this.pendingAcks.length && this.pendingAcks[0].seq <= t.ack) {
+      cutoff = this.pendingAcks.shift()!.steps;
+    }
+    this.stepBuffer = this.stepBuffer.filter((s) => s.idx > cutoff);
+
+    ship.x = t.x;
+    ship.y = t.y;
+    ship.heading = t.heading;
+    for (const s of this.stepBuffer) {
+      ship.boostFactor = s.boost;
+      ship.update(s.dt, s.turn, this.worldW, this.worldH, s.sf, s.braking);
+    }
+
+    const jump = Math.hypot(ship.x - beforeX, ship.y - beforeY);
+    let mode: 'snap' | 'catchup' | 'dashing' = 'snap';
+    // Anything under CATCHUP_MIN is ordinary per-snapshot drift — leave the
+    // instant correction just applied above, as always. Anything past
+    // SNAP_DIST is a real wrap/respawn teleport, not a hiccup — same. Only
+    // the band between is "a stall just caught up": undo the instant jump
+    // and let predictOwnShip dash there over the next few frames instead.
+    if (jump > CATCHUP_MIN && jump <= SNAP_DIST) {
+      mode = 'catchup';
+      this.catchUp = { x: ship.x, y: ship.y, heading: ship.heading };
+      ship.x = beforeX;
+      ship.y = beforeY;
+      ship.heading = beforeHeading;
+      ship.brakeFactor = beforeBrake;
+      ship.reload = beforeReload;
+    } else if (jump <= CATCHUP_MIN && this.catchUp) {
+      // Routine per-snapshot noise while a dash is already in flight —
+      // don't let it abort the dash early; just ignore it and keep going.
+      mode = 'dashing';
+      ship.x = beforeX;
+      ship.y = beforeY;
+      ship.heading = beforeHeading;
+      ship.brakeFactor = beforeBrake;
+      ship.reload = beforeReload;
+    } else {
+      this.catchUp = null;
+    }
+
+    if (this.debugOn) {
+      // A big gap since the last snapshot, or a big correction once one
+      // finally arrives, is the signature of a real network stall. Small
+      // jumps every snapshot are normal (that's the replay working).
+      if (gapMs > 100 || jump > 15) {
+        const t0 = performance.now();
+        const line = `[${(t0 / 1000).toFixed(1)}s] gap=${gapMs.toFixed(0)}ms jump=${jump.toFixed(0)}px(${mode}) ackLag=${ackLag} buf=${bufLenBefore}→${this.stepBuffer.length}`;
+        this.debugLog.push(line);
+        if (this.debugLog.length > 30) this.debugLog.shift();
+      }
+      if (this.debugEl) {
+        const live = `live: ackLag=${ackLag} buf=${this.stepBuffer.length} sinceSnap=${gapMs.toFixed(0)}ms catchUp=${this.catchUp ? 'yes' : 'no'}\n─── events (gap>100ms or jump>15px) ───\n`;
+        this.debugEl.textContent = live + this.debugLog.join('\n');
+      }
+    }
   }
 
   // ── Shared loop & effects ───────────────────────────────────────────────────
@@ -2833,4 +3081,17 @@ export class MpSession {
 function cleanName(name: string): string {
   const n = String(name).trim().slice(0, 16);
   return n.length > 0 ? n : 'Captain';
+}
+
+/** TEMPORARY netcode diagnostics overlay — see the `debugOn` field. A plain
+ *  DOM element (not canvas-drawn) so it's readable and screenshot-able over
+ *  the game, and selectable if someone wants to copy the text instead. */
+function createDebugOverlay(): HTMLPreElement {
+  const el = document.createElement('pre');
+  el.style.cssText =
+    'position:fixed;top:8px;right:8px;z-index:9999;max-width:46vw;max-height:70vh;overflow:auto;' +
+    'margin:0;padding:8px 10px;background:rgba(0,0,0,0.75);color:#7fffb0;' +
+    'font:11px/1.4 ui-monospace,monospace;white-space:pre-wrap;pointer-events:auto;user-select:text;';
+  document.body.appendChild(el);
+  return el;
 }
